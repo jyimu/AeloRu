@@ -36,5 +36,3 @@ AeloRu is a lightweight, asynchronous low-rank update framework designed for edg
 MIT License - see [LICENSE](LICENSE) for details.
 
 ---
-
-&lt;p align="center"&gt;&lt;i&gt;AeloRu: Async Edge LoRU — where Qelys begins.&lt;/i&gt;&lt;/p&gt;
