@@ -10,7 +10,7 @@ Real-time learning on consumer GPUs.
 
 AeloRu is a lightweight, asynchronous low-rank update framework designed for edge devices with limited computational resources (e.g., RTX 3050 4GB). It enables real-time, continuous learning without the memory overhead of traditional fine-tuning methods.
 
-&gt; *Inspired by Qelys.*
+&gt; *Inspired by [Qelys](https://github.com/jyimu/Qelys).*
 
 ---
 
