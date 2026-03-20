@@ -1,0 +1,530 @@
+{
+  "session_id": "hidden_states_analysis_v3_20260319_132449",
+  "experiment_name": "hidden_states_analysis_v3",
+  "config": {
+    "model_path": "models/Qwen2.5-1.5B",
+    "device": "cuda",
+    "model_size": "1.5B",
+    "analysis_type": "hidden_states_semantic_v3",
+    "n_samples_per_class": 20,
+    "extraction_strategies": [
+      "last_token",
+      "mean_token"
+    ],
+    "layer_strategies": [
+      "last",
+      "mean"
+    ]
+  },
+  "metrics_history": [
+    {
+      "step": 80,
+      "timestamp": 1773897934.4453871,
+      "name": "pca_variance_pc1_Last_Token_Last_Layer",
+      "value": 0.2556201219558716
+    },
+    {
+      "step": 80,
+      "timestamp": 1773897934.4463873,
+      "name": "pca_variance_pc2_Last_Token_Last_Layer",
+      "value": 0.09906554967164993
+    },
+    {
+      "step": 80,
+      "timestamp": 1773897934.4463873,
+      "name": "pca_cumulative_Last_Token_Last_Layer",
+      "value": 0.3546856641769409
+    },
+    {
+      "step": 80,
+      "timestamp": 1773897934.4473877,
+      "name": "pca_cumulative_10_Last_Token_Last_Layer",
+      "value": 0.6699077486991882
+    },
+    {
+      "step": 80,
+      "timestamp": 1773897934.524386,
+      "name": "avg_intra_Last_Token_Last_Layer",
+      "value": 43.441091537475586
+    },
+    {
+      "step": 80,
+      "timestamp": 1773897934.525387,
+      "name": "avg_inter_Last_Token_Last_Layer",
+      "value": 80.51945559183757
+    },
+    {
+      "step": 80,
+      "timestamp": 1773897934.525387,
+      "name": "separation_ratio_Last_Token_Last_Layer",
+      "value": 1.8535320532260422
+    },
+    {
+      "step": 80,
+      "timestamp": 1773897934.525387,
+      "name": "silhouette_Last_Token_Last_Layer",
+      "value": 0.4307606504058983
+    },
+    {
+      "step": 160,
+      "timestamp": 1773897973.0953877,
+      "name": "pca_variance_pc1_Mean_Token_Last_Layer",
+      "value": 0.4156760275363922
+    },
+    {
+      "step": 160,
+      "timestamp": 1773897973.0963876,
+      "name": "pca_variance_pc2_Mean_Token_Last_Layer",
+      "value": 0.09541434049606323
+    },
+    {
+      "step": 160,
+      "timestamp": 1773897973.0963876,
+      "name": "pca_cumulative_Mean_Token_Last_Layer",
+      "value": 0.5110903978347778
+    },
+    {
+      "step": 160,
+      "timestamp": 1773897973.0963876,
+      "name": "pca_cumulative_10_Mean_Token_Last_Layer",
+      "value": 0.7618052959442139
+    },
+    {
+      "step": 160,
+      "timestamp": 1773897973.1223876,
+      "name": "avg_intra_Mean_Token_Last_Layer",
+      "value": 30.05647611618042
+    },
+    {
+      "step": 160,
+      "timestamp": 1773897973.1223876,
+      "name": "avg_inter_Mean_Token_Last_Layer",
+      "value": 69.21920267740886
+    },
+    {
+      "step": 160,
+      "timestamp": 1773897973.1223876,
+      "name": "separation_ratio_Mean_Token_Last_Layer",
+      "value": 2.30297132670672
+    },
+    {
+      "step": 160,
+      "timestamp": 1773897973.1233873,
+      "name": "silhouette_Mean_Token_Last_Layer",
+      "value": 0.5029744263236783
+    },
+    {
+      "step": 240,
+      "timestamp": 1773898013.9503863,
+      "name": "pca_variance_pc1_Last_Token_All_Layers_Mean",
+      "value": 0.10751158744096756
+    },
+    {
+      "step": 240,
+      "timestamp": 1773898013.9513867,
+      "name": "pca_variance_pc2_Last_Token_All_Layers_Mean",
+      "value": 0.08811014145612717
+    },
+    {
+      "step": 240,
+      "timestamp": 1773898013.9513867,
+      "name": "pca_cumulative_Last_Token_All_Layers_Mean",
+      "value": 0.19562172889709473
+    },
+    {
+      "step": 240,
+      "timestamp": 1773898013.952387,
+      "name": "pca_cumulative_10_Last_Token_All_Layers_Mean",
+      "value": 0.46577712893486023
+    },
+    {
+      "step": 240,
+      "timestamp": 1773898013.9873874,
+      "name": "avg_intra_Last_Token_All_Layers_Mean",
+      "value": 20.516873359680176
+    },
+    {
+      "step": 240,
+      "timestamp": 1773898013.9883895,
+      "name": "avg_inter_Last_Token_All_Layers_Mean",
+      "value": 34.614580154418945
+    },
+    {
+      "step": 240,
+      "timestamp": 1773898013.9883895,
+      "name": "separation_ratio_Last_Token_All_Layers_Mean",
+      "value": 1.6871274461557884
+    },
+    {
+      "step": 240,
+      "timestamp": 1773898013.9883895,
+      "name": "silhouette_Last_Token_All_Layers_Mean",
+      "value": 0.3961460962927835
+    },
+    {
+      "step": 320,
+      "timestamp": 1773898048.7574272,
+      "name": "pca_variance_pc1_Mean_Token_All_Layers_Mean",
+      "value": 0.9932132959365845
+    },
+    {
+      "step": 320,
+      "timestamp": 1773898048.758387,
+      "name": "pca_variance_pc2_Mean_Token_All_Layers_Mean",
+      "value": 0.0010984480613842607
+    },
+    {
+      "step": 320,
+      "timestamp": 1773898048.758387,
+      "name": "pca_cumulative_Mean_Token_All_Layers_Mean",
+      "value": 0.9943117499351501
+    },
+    {
+      "step": 320,
+      "timestamp": 1773898048.7593875,
+      "name": "pca_cumulative_10_Mean_Token_All_Layers_Mean",
+      "value": 0.9972121715545654
+    },
+    {
+      "step": 320,
+      "timestamp": 1773898048.793387,
+      "name": "avg_intra_Mean_Token_All_Layers_Mean",
+      "value": 348.8780517578125
+    },
+    {
+      "step": 320,
+      "timestamp": 1773898048.794388,
+      "name": "avg_inter_Mean_Token_All_Layers_Mean",
+      "value": 511.7022654215495
+    },
+    {
+      "step": 320,
+      "timestamp": 1773898048.794388,
+      "name": "separation_ratio_Mean_Token_All_Layers_Mean",
+      "value": 1.4667081028552862
+    },
+    {
+      "step": 320,
+      "timestamp": 1773898048.794388,
+      "name": "silhouette_Mean_Token_All_Layers_Mean",
+      "value": 0.3047931943921096
+    }
+  ],
+  "final_result": {
+    "status": "success",
+    "best_strategy": "Mean_Token_Last_Layer",
+    "all_results": {
+      "Last_Token_Last_Layer": {
+        "metrics": {
+          "intra_distances": {
+            "animal": 28.378448486328125,
+            "code": 65.1366958618164,
+            "emotion": 35.29200744628906,
+            "number": 44.95721435546875
+          },
+          "inter_distances": [
+            [
+              "animal",
+              "code",
+              105.89885711669922
+            ],
+            [
+              "animal",
+              "emotion",
+              53.94523239135742
+            ],
+            [
+              "animal",
+              "number",
+              66.26648712158203
+            ],
+            [
+              "code",
+              "emotion",
+              103.33839416503906
+            ],
+            [
+              "code",
+              "number",
+              89.15449523925781
+            ],
+            [
+              "emotion",
+              "number",
+              64.51326751708984
+            ]
+          ],
+          "avg_intra": 43.441091537475586,
+          "avg_inter": 80.51945559183757,
+          "separation_ratio": 1.8535320532260422,
+          "silhouette_score": 0.4307606504058983
+        },
+        "pca_variance": [
+          0.2556201219558716,
+          0.09906554967164993,
+          0.07309842854738235,
+          0.06461375951766968,
+          0.05436075106263161,
+          0.03190262243151665,
+          0.030004866421222687,
+          0.025585882365703583,
+          0.018888181075453758,
+          0.016767600551247597
+        ],
+        "cumulative_variance": [
+          0.2556201219558716,
+          0.3546856641769409,
+          0.4277840852737427,
+          0.49239784479141235,
+          0.5467585921287537,
+          0.5786612033843994,
+          0.6086660623550415,
+          0.6342519521713257,
+          0.653140127658844,
+          0.6699077486991882
+        ],
+        "plot_path": "AeLoRu\\experiment\\log\\hidden_states_analysis_v3_20260319_132449_Last_Token_Last_Layer.png"
+      },
+      "Mean_Token_Last_Layer": {
+        "metrics": {
+          "intra_distances": {
+            "animal": 25.025306701660156,
+            "code": 42.15438461303711,
+            "emotion": 24.15475845336914,
+            "number": 28.891454696655273
+          },
+          "inter_distances": [
+            [
+              "animal",
+              "code",
+              89.46949005126953
+            ],
+            [
+              "animal",
+              "emotion",
+              45.51453399658203
+            ],
+            [
+              "animal",
+              "number",
+              40.99177169799805
+            ],
+            [
+              "code",
+              "emotion",
+              101.1147232055664
+            ],
+            [
+              "code",
+              "number",
+              84.65703582763672
+            ],
+            [
+              "emotion",
+              "number",
+              53.56766128540039
+            ]
+          ],
+          "avg_intra": 30.05647611618042,
+          "avg_inter": 69.21920267740886,
+          "separation_ratio": 2.30297132670672,
+          "silhouette_score": 0.5029744263236783
+        },
+        "pca_variance": [
+          0.4156760275363922,
+          0.09541434049606323,
+          0.061891231685876846,
+          0.04776569828391075,
+          0.0442364327609539,
+          0.028314175084233284,
+          0.021863507106900215,
+          0.018770430237054825,
+          0.014523942023515701,
+          0.013349493965506554
+        ],
+        "cumulative_variance": [
+          0.4156760275363922,
+          0.5110903978347778,
+          0.5729816555976868,
+          0.6207473278045654,
+          0.6649837493896484,
+          0.6932979226112366,
+          0.7151614427566528,
+          0.7339318990707397,
+          0.748455822467804,
+          0.7618052959442139
+        ],
+        "plot_path": "AeLoRu\\experiment\\log\\hidden_states_analysis_v3_20260319_132449_Mean_Token_Last_Layer.png"
+      },
+      "Last_Token_All_Layers_Mean": {
+        "metrics": {
+          "intra_distances": {
+            "animal": 21.293161392211914,
+            "code": 20.046058654785156,
+            "emotion": 23.12101936340332,
+            "number": 17.607254028320312
+          },
+          "inter_distances": [
+            [
+              "animal",
+              "code",
+              38.49644088745117
+            ],
+            [
+              "animal",
+              "emotion",
+              29.922313690185547
+            ],
+            [
+              "animal",
+              "number",
+              34.305667877197266
+            ],
+            [
+              "code",
+              "emotion",
+              35.88155746459961
+            ],
+            [
+              "code",
+              "number",
+              34.931182861328125
+            ],
+            [
+              "emotion",
+              "number",
+              34.15031814575195
+            ]
+          ],
+          "avg_intra": 20.516873359680176,
+          "avg_inter": 34.614580154418945,
+          "separation_ratio": 1.6871274461557884,
+          "silhouette_score": 0.3961460962927835
+        },
+        "pca_variance": [
+          0.10751158744096756,
+          0.08811014145612717,
+          0.062166355550289154,
+          0.04622140899300575,
+          0.03514094278216362,
+          0.031039511784911156,
+          0.02700292505323887,
+          0.02384958229959011,
+          0.02292361482977867,
+          0.02181105874478817
+        ],
+        "cumulative_variance": [
+          0.10751158744096756,
+          0.19562172889709473,
+          0.2577880918979645,
+          0.30400949716567993,
+          0.33915042877197266,
+          0.37018993496894836,
+          0.3971928656101227,
+          0.42104244232177734,
+          0.4439660608768463,
+          0.46577712893486023
+        ],
+        "plot_path": "AeLoRu\\experiment\\log\\hidden_states_analysis_v3_20260319_132449_Last_Token_All_Layers_Mean.png"
+      },
+      "Mean_Token_All_Layers_Mean": {
+        "metrics": {
+          "intra_distances": {
+            "animal": 328.3850402832031,
+            "code": 518.4655151367188,
+            "emotion": 201.8817138671875,
+            "number": 346.7799377441406
+          },
+          "inter_distances": [
+            [
+              "animal",
+              "code",
+              970.6884155273438
+            ],
+            [
+              "animal",
+              "emotion",
+              430.3476257324219
+            ],
+            [
+              "animal",
+              "number",
+              578.5411987304688
+            ],
+            [
+              "code",
+              "emotion",
+              542.975830078125
+            ],
+            [
+              "code",
+              "number",
+              394.087158203125
+            ],
+            [
+              "emotion",
+              "number",
+              153.5733642578125
+            ]
+          ],
+          "avg_intra": 348.8780517578125,
+          "avg_inter": 511.7022654215495,
+          "separation_ratio": 1.4667081028552862,
+          "silhouette_score": 0.3047931943921096
+        },
+        "pca_variance": [
+          0.9932132959365845,
+          0.0010984480613842607,
+          0.0008882504189386964,
+          0.0006412631482817233,
+          0.00032259593717753887,
+          0.0002897406811825931,
+          0.00020688377844635397,
+          0.00020144572772551328,
+          0.0001816961303120479,
+          0.000168549784575589
+        ],
+        "cumulative_variance": [
+          0.9932132959365845,
+          0.9943117499351501,
+          0.995199978351593,
+          0.9958412647247314,
+          0.9961638450622559,
+          0.996453583240509,
+          0.9966604709625244,
+          0.9968619346618652,
+          0.9970436096191406,
+          0.9972121715545654
+        ],
+        "plot_path": "AeLoRu\\experiment\\log\\hidden_states_analysis_v3_20260319_132449_Mean_Token_All_Layers_Mean.png"
+      }
+    },
+    "comparison": {
+      "Last_Token_Last_Layer": {
+        "separation_ratio": 1.8535320532260422,
+        "silhouette_score": 0.4307606504058983,
+        "cumulative_variance_10pc": 0.6699077486991882
+      },
+      "Mean_Token_Last_Layer": {
+        "separation_ratio": 2.30297132670672,
+        "silhouette_score": 0.5029744263236783,
+        "cumulative_variance_10pc": 0.7618052959442139
+      },
+      "Last_Token_All_Layers_Mean": {
+        "separation_ratio": 1.6871274461557884,
+        "silhouette_score": 0.3961460962927835,
+        "cumulative_variance_10pc": 0.46577712893486023
+      },
+      "Mean_Token_All_Layers_Mean": {
+        "separation_ratio": 1.4667081028552862,
+        "silhouette_score": 0.3047931943921096,
+        "cumulative_variance_10pc": 0.9972121715545654
+      }
+    }
+  },
+  "summary": {
+    "total_steps": 320,
+    "total_time": 160.10299825668335,
+    "device": "cuda"
+  }
+}
