@@ -14,7 +14,7 @@ AeloRu is a research framework for investigating **semantic structures in PEFT w
 
 ---
 
-## Research Objectives([the latest progress](Experimental Report on Semantic Analysis of Hidden States(隐藏状态语义分析实验报告).md))
+## Research Objectives([the latest progress](https://github.com/jyimu/AeloRu/blob/main/Experimental%20Report%20on%20Semantic%20Analysis%20of%20Hidden%20States(%E9%9A%90%E8%97%8F%E7%8A%B6%E6%80%81%E8%AF%AD%E4%B9%89%E5%88%86%E6%9E%90%E5%AE%9E%E9%AA%8C%E6%8A%A5%E5%91%8A).md))
 
 | Phase | Objective | Status |
 |-------|-----------|--------|
@@ -30,7 +30,7 @@ AeloRu is a research framework for investigating **semantic structures in PEFT w
 
 ### 1️⃣ HiRA-DoRA Fusion
 
-**Concept**: Apply amplitude-direction decoupling to the Hadamard modulation term `(1 + AB)`, not to W0.
+**Concept:** Apply amplitude-direction decoupling to the Hadamard modulation term instead of *W_0*.
 
 ```python
 # Standard HiRA
@@ -44,15 +44,12 @@ direction = delta / (torch.abs(delta) + 1e-8)  # Normalized direction
 W = W0 * (magnitude * direction)
 ```
 
-**Innovation**: First combination of HiRA's multiplicative structure with DoRA's magnitude-direction separation.
-
----
+Innovation: First to combine HiRA's multiplicative structure with DoRA's magnitude-direction separation.
+4GB VRAM Adaptation: Planned optimization via 4-bit quantization of W0 with HiRA-DoRA operating in 8-bit, reducing activation memory by ~60%.
 
 ### 2️⃣ Hebbian-RL Hybrid Learning
-
-**Concept**: Detect similar inputs and reinforce gradients based on historical success patterns.
-
-```python
+Concept: Detect similar inputs and amplify gradients based on historical success patterns.
+``` python
 # Hebbian memory bank
 similarity = hebb_bank.find_similar(input_signature)
 
@@ -66,6 +63,8 @@ if similarity > 0.85:
 ```
 
 **Innovation**: Real-time fusion of Hebbian plasticity with RL gradients for adaptive learning.
+
+maybe can 4GB VRAM Adaptation: Memory bank will use CPU offloading with async prefetch; only top-k similar entries cached in GPU memory (configurable k ≤ 16).
 
 ---
 
@@ -166,15 +165,6 @@ if similarity > 0.85:
 
 ---
 
-## Paper Title Candidates
-
-> **"Beyond Low-Rank: Adaptive Amplitude-Direction Modulation with Hebbian Enhancement for Real-Time Model Alignment"**
-
-or
-
-> **"Breaking the Rank Bottleneck: Dynamic Plasticity through Amplitude-Direction Decoupling and Activity-Dependent Reinforcement"**
-
----
 
 ## License
 
