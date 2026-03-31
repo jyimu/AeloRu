@@ -1,0 +1,80 @@
+{
+  "session_id": "test_logger_20260319_121223",
+  "experiment_name": "test_logger",
+  "config": {
+    "model": "Qwen2.5-0.5B",
+    "lr": 0.0001,
+    "batch_size": 4
+  },
+  "metrics_history": [
+    {
+      "step": 1,
+      "timestamp": 1773893543.6698365,
+      "name": "loss",
+      "value": 1.0
+    },
+    {
+      "step": 1,
+      "timestamp": 1773893543.6698365,
+      "name": "accuracy",
+      "value": 0.5
+    },
+    {
+      "step": 2,
+      "timestamp": 1773893543.771008,
+      "name": "loss",
+      "value": 0.5
+    },
+    {
+      "step": 2,
+      "timestamp": 1773893543.771008,
+      "name": "accuracy",
+      "value": 0.6
+    },
+    {
+      "step": 3,
+      "timestamp": 1773893543.872726,
+      "name": "loss",
+      "value": 0.3333333333333333
+    },
+    {
+      "step": 3,
+      "timestamp": 1773893543.872726,
+      "name": "accuracy",
+      "value": 0.7
+    },
+    {
+      "step": 4,
+      "timestamp": 1773893543.974796,
+      "name": "loss",
+      "value": 0.25
+    },
+    {
+      "step": 4,
+      "timestamp": 1773893543.974962,
+      "name": "accuracy",
+      "value": 0.8
+    },
+    {
+      "step": 5,
+      "timestamp": 1773893544.0760713,
+      "name": "loss",
+      "value": 0.2
+    },
+    {
+      "step": 5,
+      "timestamp": 1773893544.078072,
+      "name": "accuracy",
+      "value": 0.9
+    }
+  ],
+  "final_result": {
+    "final_accuracy": 0.95,
+    "status": "success"
+  },
+  "summary": {
+    "total_steps": 5,
+    "total_time": 0.5122449398040771,
+    "device": "cuda"
+  }
+}

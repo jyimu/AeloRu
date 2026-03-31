@@ -1,0 +1,235 @@
+{
+  "method": "full_vector",
+  "threshold": 0.5,
+  "timestamp": "2026-03-21T23:56:12.411123",
+  "total_pairs": 19,
+  "correct": 16,
+  "errors": 3,
+  "accuracy": 0.8421052631578947,
+  "similar_accuracy": 0.7777777777777778,
+  "dissimilar_accuracy": 0.9,
+  "pairs": [
+    {
+      "text1": "开心",
+      "text2": "高兴",
+      "is_similar": true,
+      "text_similarity": 0.5381653308868408,
+      "delta_w_similarity": 0.5165551900863647,
+      "predicted": true,
+      "match": true,
+      "threshold": 0.5
+    },
+    {
+      "text1": "美丽",
+      "text2": "漂亮",
+      "is_similar": true,
+      "text_similarity": 0.45045483112335205,
+      "delta_w_similarity": 0.37386608123779297,
+      "predicted": false,
+      "match": false,
+      "threshold": 0.5
+    },
+    {
+      "text1": "今天心情很好",
+      "text2": "我感到非常开心",
+      "is_similar": true,
+      "text_similarity": 0.29548001289367676,
+      "delta_w_similarity": 0.4154200553894043,
+      "predicted": false,
+      "match": false,
+      "threshold": 0.5
+    },
+    {
+      "text1": "猫",
+      "text2": "小猫",
+      "is_similar": true,
+      "text_similarity": 0.6830506920814514,
+      "delta_w_similarity": 0.620094358921051,
+      "predicted": true,
+      "match": true,
+      "threshold": 0.5
+    },
+    {
+      "text1": "狗",
+      "text2": "小狗",
+      "is_similar": true,
+      "text_similarity": 0.5017832517623901,
+      "delta_w_similarity": 0.6732104420661926,
+      "predicted": true,
+      "match": true,
+      "threshold": 0.5
+    },
+    {
+      "text1": "计算 123+456",
+      "text2": "算一下 123+456",
+      "is_similar": true,
+      "text_similarity": 0.9793478846549988,
+      "delta_w_similarity": 0.9859455227851868,
+      "predicted": true,
+      "match": true,
+      "threshold": 0.5
+    },
+    {
+      "text1": "def hello():",
+      "text2": "def hello()  ",
+      "is_similar": true,
+      "text_similarity": 0.6033151745796204,
+      "delta_w_similarity": 0.5629323124885559,
+      "predicted": true,
+      "match": true,
+      "threshold": 0.5
+    },
+    {
+      "text1": "我喜欢编程",
+      "text2": "我热爱写代码",
+      "is_similar": true,
+      "text_similarity": 0.4105548858642578,
+      "delta_w_similarity": 0.6267735958099365,
+      "predicted": true,
+      "match": true,
+      "threshold": 0.5
+    },
+    {
+      "text1": "你好",
+      "text2": "您好",
+      "is_similar": true,
+      "text_similarity": 0.6542471647262573,
+      "delta_w_similarity": 0.7027194499969482,
+      "predicted": true,
+      "match": true,
+      "threshold": 0.5
+    },
+    {
+      "text1": "猫",
+      "text2": "狗",
+      "is_similar": false,
+      "text_similarity": 0.4206453561782837,
+      "delta_w_similarity": 0.4320700764656067,
+      "predicted": false,
+      "match": true,
+      "threshold": 0.5
+    },
+    {
+      "text1": "开心",
+      "text2": "悲伤",
+      "is_similar": false,
+      "text_similarity": 0.20352458953857422,
+      "delta_w_similarity": 0.2693910002708435,
+      "predicted": false,
+      "match": true,
+      "threshold": 0.5
+    },
+    {
+      "text1": "猫",
+      "text2": "def hello():",
+      "is_similar": false,
+      "text_similarity": 0.08763951063156128,
+      "delta_w_similarity": 0.13201427459716797,
+      "predicted": false,
+      "match": true,
+      "threshold": 0.5
+    },
+    {
+      "text1": "计算 123+456",
+      "text2": "3.14 是圆周率",
+      "is_similar": false,
+      "text_similarity": 0.807877779006958,
+      "delta_w_similarity": 0.8037285804748535,
+      "predicted": true,
+      "match": false,
+      "threshold": 0.5
+    },
+    {
+      "text1": "今天心情很好",
+      "text2": "狮子是草原之王",
+      "is_similar": false,
+      "text_similarity": 0.13151216506958008,
+      "delta_w_similarity": 0.25949323177337646,
+      "predicted": false,
+      "match": true,
+      "threshold": 0.5
+    },
+    {
+      "text1": "import torch",
+      "text2": "我感到悲伤",
+      "is_similar": false,
+      "text_similarity": 0.035907626152038574,
+      "delta_w_similarity": -0.0827411413192749,
+      "predicted": false,
+      "match": true,
+      "threshold": 0.5
+    },
+    {
+      "text1": "老鼠",
+      "text2": "100",
+      "is_similar": false,
+      "text_similarity": -0.22236502170562744,
+      "delta_w_similarity": -0.29656362533569336,
+      "predicted": false,
+      "match": true,
+      "threshold": 0.5
+    },
+    {
+      "text1": "小猫",
+      "text2": "happy",
+      "is_similar": false,
+      "text_similarity": 0.06205403804779053,
+      "delta_w_similarity": 0.1909332275390625,
+      "predicted": false,
+      "match": true,
+      "threshold": 0.5
+    },
+    {
+      "text1": "仓鼠",
+      "text2": "sad",
+      "is_similar": false,
+      "text_similarity": 0.1445164680480957,
+      "delta_w_similarity": 0.21538329124450684,
+      "predicted": false,
+      "match": true,
+      "threshold": 0.5
+    },
+    {
+      "text1": "狗",
+      "text2": "def world():",
+      "is_similar": false,
+      "text_similarity": 0.08474993705749512,
+      "delta_w_similarity": 0.10996919870376587,
+      "predicted": false,
+      "match": true,
+      "threshold": 0.5
+    }
+  ],
+  "error_details": [
+    {
+      "text1": "美丽",
+      "text2": "漂亮",
+      "is_similar": true,
+      "text_similarity": 0.45045483112335205,
+      "delta_w_similarity": 0.37386608123779297,
+      "predicted": false,
+      "match": false,
+      "threshold": 0.5
+    },
+    {
+      "text1": "今天心情很好",
+      "text2": "我感到非常开心",
+      "is_similar": true,
+      "text_similarity": 0.29548001289367676,
+      "delta_w_similarity": 0.4154200553894043,
+      "predicted": false,
+      "match": false,
+      "threshold": 0.5
+    },
+    {
+      "text1": "计算 123+456",
+      "text2": "3.14 是圆周率",
+      "is_similar": false,
+      "text_similarity": 0.807877779006958,
+      "delta_w_similarity": 0.8037285804748535,
+      "predicted": true,
+      "match": false,
+      "threshold": 0.5
+    }
+  ]
+}

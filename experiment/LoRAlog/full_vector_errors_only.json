@@ -1,0 +1,36 @@
+{
+  "total_errors": 3,
+  "accuracy": 0.8421052631578947,
+  "errors": [
+    {
+      "text1": "美丽",
+      "text2": "漂亮",
+      "is_similar": true,
+      "text_similarity": 0.45045483112335205,
+      "delta_w_similarity": 0.37386608123779297,
+      "predicted": false,
+      "match": false,
+      "threshold": 0.5
+    },
+    {
+      "text1": "今天心情很好",
+      "text2": "我感到非常开心",
+      "is_similar": true,
+      "text_similarity": 0.29548001289367676,
+      "delta_w_similarity": 0.4154200553894043,
+      "predicted": false,
+      "match": false,
+      "threshold": 0.5
+    },
+    {
+      "text1": "计算 123+456",
+      "text2": "3.14 是圆周率",
+      "is_similar": false,
+      "text_similarity": 0.807877779006958,
+      "delta_w_similarity": 0.8037285804748535,
+      "predicted": true,
+      "match": false,
+      "threshold": 0.5
+    }
+  ]
+}

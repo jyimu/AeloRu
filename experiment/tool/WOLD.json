@@ -1,0 +1,66 @@
+{
+    "animal": [
+        "dog",
+        "cat",
+        "bird",
+        "elephant",
+        "狗",
+        "猫",
+        "老鼠",
+        "小猫",
+        "仓鼠"
+    ],
+    "number": [
+        "1",
+        "2",
+        "3",
+        "one",
+        "two",
+        "three",
+        "一",
+        "二",
+        "三"
+    ],
+    "emotion": [
+        "happy",
+        "sad",
+        "angry",
+        "excited",
+        "高兴",
+        "伤心",
+        "生气",
+        "兴奋"
+    
+    ],
+    "code": [
+        "print('Hello, World!')",
+        "for i in range(5): print(i)",
+        "def add(a, b): return a + b",
+        "if x > 0: print('Positive')",
+        "console.log('Hello, World!');",
+        "for (let i = 0; i < 5; i++) { console.log(i); }",
+        "function add(a, b) { return a + b; }",
+        "if (x > 0) { console.log('Positive'); }"
+    ]
+}
+{
+    "animal": [
+        "dog",
+        "cat",
+        "bird",
+        "elephant",
+        "狗",
+        "猫",
+        "老鼠",
+        "小猫",
+        "仓鼠"
+    ],
+    "number": [
+        
+    ],
+    "emotion": [
+    
+    ],
+    "code": [
+    ]
+}
