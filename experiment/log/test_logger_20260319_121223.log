@@ -1,0 +1,36 @@
+============================================================
+AeLoRu Experiment Log
+============================================================
+Session ID: test_logger_20260319_121223
+Experiment: test_logger
+Start Time: 2026-03-19T12:12:23.666882
+Device: cuda
+PyTorch Version: 2.6.0+cu126
+============================================================
+
+[12:12:23] [     0.001s] [Step 0] [INFO    ] Logger initialized: test_logger_20260319_121223
+[12:12:23] [     0.001s] [Step 0] [INFO    ] Log file: AeLoRu\experiment\log\test_logger_20260319_121223.log
+[12:12:23] [     0.001s] [Step 0] [INFO    ] JSON file: AeLoRu\experiment\log\test_logger_20260319_121223.json
+[12:12:23] [     0.002s] [Step 0] [INFO    ] Config updated: {
+  "model": "Qwen2.5-0.5B",
+  "lr": 0.0001,
+  "batch_size": 4
+}
+[12:12:23] [     0.003s] [Step 1] [INFO    ] Metric [loss]: 1.000000
+[12:12:23] [     0.003s] [Step 1] [INFO    ] Metric [accuracy]: 0.500000
+[12:12:23] [     0.104s] [Step 2] [INFO    ] Metric [loss]: 0.500000
+[12:12:23] [     0.104s] [Step 2] [INFO    ] Metric [accuracy]: 0.600000
+[12:12:23] [     0.206s] [Step 3] [INFO    ] Metric [loss]: 0.333333
+[12:12:23] [     0.206s] [Step 3] [INFO    ] Metric [accuracy]: 0.700000
+[12:12:23] [     0.308s] [Step 4] [INFO    ] Metric [loss]: 0.250000
+[12:12:23] [     0.308s] [Step 4] [INFO    ] Metric [accuracy]: 0.800000
+[12:12:24] [     0.409s] [Step 5] [INFO    ] Metric [loss]: 0.200000
+[12:12:24] [     0.411s] [Step 5] [INFO    ] Metric [accuracy]: 0.900000
+[12:12:24] [     0.512s] [Step 5] [INFO    ] Finalizing experiment...
+[12:12:24] [     0.513s] [Step 5] [SUCCESS ] Results saved to AeLoRu\experiment\log\test_logger_20260319_121223.json
+
+============================================================
+Experiment End: 2026-03-19T12:12:24.181034
+Total Time: 0.51s
+Total Steps: 5
+============================================================

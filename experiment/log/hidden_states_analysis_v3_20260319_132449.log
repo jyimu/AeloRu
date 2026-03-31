@@ -1,0 +1,104 @@
+============================================================
+AeLoRu Experiment Log
+============================================================
+Session ID: hidden_states_analysis_v3_20260319_132449
+Experiment: hidden_states_analysis_v3
+Start Time: 2026-03-19T13:24:49.020388
+Device: cuda
+PyTorch Version: 2.6.0+cu126
+============================================================
+
+[13:24:49] [     0.001s] [Step 0] [INFO    ] Logger initialized: hidden_states_analysis_v3_20260319_132449
+[13:24:49] [     0.001s] [Step 0] [INFO    ] Log file: AeLoRu\experiment\log\hidden_states_analysis_v3_20260319_132449.log
+[13:24:49] [     0.001s] [Step 0] [INFO    ] JSON file: AeLoRu\experiment\log\hidden_states_analysis_v3_20260319_132449.json
+[13:24:49] [     0.003s] [Step 0] [INFO    ] Config updated: {
+  "model_path": "models/Qwen2.5-1.5B",
+  "device": "cuda",
+  "model_size": "1.5B",
+  "analysis_type": "hidden_states_semantic_v3",
+  "n_samples_per_class": 20,
+  "extraction_strategies": [
+    "last_token",
+    "mean_token"
+  ],
+  "layer_strategies": [
+    "last",
+    "mean"
+  ]
+}
+[13:24:49] [     0.003s] [Step 0] [INFO    ] Loading model...
+[13:24:56] [     7.313s] [Step 0] [SUCCESS ] Model loaded successfully
+[13:24:56] [     7.316s] [Step 0] [INFO    ] 
+==================================================
+[13:24:56] [     7.317s] [Step 0] [INFO    ] Running experiment: Last_Token_Last_Layer
+[13:24:56] [     7.317s] [Step 0] [INFO    ] ==================================================
+[13:25:34] [    45.425s] [Step 80] [INFO    ] Metric [pca_variance_pc1_Last_Token_Last_Layer]: 0.255620
+[13:25:34] [    45.426s] [Step 80] [INFO    ] Metric [pca_variance_pc2_Last_Token_Last_Layer]: 0.099066
+[13:25:34] [    45.427s] [Step 80] [INFO    ] Metric [pca_cumulative_Last_Token_Last_Layer]: 0.354686
+[13:25:34] [    45.427s] [Step 80] [INFO    ] Metric [pca_cumulative_10_Last_Token_Last_Layer]: 0.669908
+[13:25:34] [    45.504s] [Step 80] [INFO    ] Metric [avg_intra_Last_Token_Last_Layer]: 43.441092
+[13:25:34] [    45.505s] [Step 80] [INFO    ] Metric [avg_inter_Last_Token_Last_Layer]: 80.519456
+[13:25:34] [    45.505s] [Step 80] [INFO    ] Metric [separation_ratio_Last_Token_Last_Layer]: 1.853532
+[13:25:34] [    45.505s] [Step 80] [INFO    ] Metric [silhouette_Last_Token_Last_Layer]: 0.430761
+[13:25:35] [    46.183s] [Step 80] [SUCCESS ] Plot saved: AeLoRu\experiment\log\hidden_states_analysis_v3_20260319_132449_Last_Token_Last_Layer.png
+[13:25:35] [    46.183s] [Step 80] [INFO    ] Good clustering. Ratio: 1.854
+[13:25:35] [    46.184s] [Step 80] [INFO    ] 
+==================================================
+[13:25:35] [    46.184s] [Step 80] [INFO    ] Running experiment: Mean_Token_Last_Layer
+[13:25:35] [    46.184s] [Step 80] [INFO    ] ==================================================
+[13:26:13] [    84.075s] [Step 160] [INFO    ] Metric [pca_variance_pc1_Mean_Token_Last_Layer]: 0.415676
+[13:26:13] [    84.076s] [Step 160] [INFO    ] Metric [pca_variance_pc2_Mean_Token_Last_Layer]: 0.095414
+[13:26:13] [    84.076s] [Step 160] [INFO    ] Metric [pca_cumulative_Mean_Token_Last_Layer]: 0.511090
+[13:26:13] [    84.076s] [Step 160] [INFO    ] Metric [pca_cumulative_10_Mean_Token_Last_Layer]: 0.761805
+[13:26:13] [    84.102s] [Step 160] [INFO    ] Metric [avg_intra_Mean_Token_Last_Layer]: 30.056476
+[13:26:13] [    84.102s] [Step 160] [INFO    ] Metric [avg_inter_Mean_Token_Last_Layer]: 69.219203
+[13:26:13] [    84.102s] [Step 160] [INFO    ] Metric [separation_ratio_Mean_Token_Last_Layer]: 2.302971
+[13:26:13] [    84.103s] [Step 160] [INFO    ] Metric [silhouette_Mean_Token_Last_Layer]: 0.502974
+[13:26:13] [    84.466s] [Step 160] [SUCCESS ] Plot saved: AeLoRu\experiment\log\hidden_states_analysis_v3_20260319_132449_Mean_Token_Last_Layer.png
+[13:26:13] [    84.467s] [Step 160] [INFO    ] Good clustering. Ratio: 2.303
+[13:26:13] [    84.467s] [Step 160] [INFO    ] 
+==================================================
+[13:26:13] [    84.467s] [Step 160] [INFO    ] Running experiment: Last_Token_All_Layers_Mean
+[13:26:13] [    84.468s] [Step 160] [INFO    ] ==================================================
+[13:26:53] [   124.930s] [Step 240] [INFO    ] Metric [pca_variance_pc1_Last_Token_All_Layers_Mean]: 0.107512
+[13:26:53] [   124.931s] [Step 240] [INFO    ] Metric [pca_variance_pc2_Last_Token_All_Layers_Mean]: 0.088110
+[13:26:53] [   124.931s] [Step 240] [INFO    ] Metric [pca_cumulative_Last_Token_All_Layers_Mean]: 0.195622
+[13:26:53] [   124.932s] [Step 240] [INFO    ] Metric [pca_cumulative_10_Last_Token_All_Layers_Mean]: 0.465777
+[13:26:53] [   124.967s] [Step 240] [INFO    ] Metric [avg_intra_Last_Token_All_Layers_Mean]: 20.516873
+[13:26:53] [   124.968s] [Step 240] [INFO    ] Metric [avg_inter_Last_Token_All_Layers_Mean]: 34.614580
+[13:26:53] [   124.968s] [Step 240] [INFO    ] Metric [separation_ratio_Last_Token_All_Layers_Mean]: 1.687127
+[13:26:53] [   124.968s] [Step 240] [INFO    ] Metric [silhouette_Last_Token_All_Layers_Mean]: 0.396146
+[13:26:54] [   125.370s] [Step 240] [SUCCESS ] Plot saved: AeLoRu\experiment\log\hidden_states_analysis_v3_20260319_132449_Last_Token_All_Layers_Mean.png
+[13:26:54] [   125.371s] [Step 240] [WARNING ] Moderate clustering. Ratio: 1.687
+[13:26:54] [   125.371s] [Step 240] [INFO    ] 
+==================================================
+[13:26:54] [   125.372s] [Step 240] [INFO    ] Running experiment: Mean_Token_All_Layers_Mean
+[13:26:54] [   125.372s] [Step 240] [INFO    ] ==================================================
+[13:27:28] [   159.737s] [Step 320] [INFO    ] Metric [pca_variance_pc1_Mean_Token_All_Layers_Mean]: 0.993213
+[13:27:28] [   159.738s] [Step 320] [INFO    ] Metric [pca_variance_pc2_Mean_Token_All_Layers_Mean]: 0.001098
+[13:27:28] [   159.738s] [Step 320] [INFO    ] Metric [pca_cumulative_Mean_Token_All_Layers_Mean]: 0.994312
+[13:27:28] [   159.739s] [Step 320] [INFO    ] Metric [pca_cumulative_10_Mean_Token_All_Layers_Mean]: 0.997212
+[13:27:28] [   159.773s] [Step 320] [INFO    ] Metric [avg_intra_Mean_Token_All_Layers_Mean]: 348.878052
+[13:27:28] [   159.774s] [Step 320] [INFO    ] Metric [avg_inter_Mean_Token_All_Layers_Mean]: 511.702265
+[13:27:28] [   159.774s] [Step 320] [INFO    ] Metric [separation_ratio_Mean_Token_All_Layers_Mean]: 1.466708
+[13:27:28] [   159.774s] [Step 320] [INFO    ] Metric [silhouette_Mean_Token_All_Layers_Mean]: 0.304793
+[13:27:29] [   160.100s] [Step 320] [SUCCESS ] Plot saved: AeLoRu\experiment\log\hidden_states_analysis_v3_20260319_132449_Mean_Token_All_Layers_Mean.png
+[13:27:29] [   160.100s] [Step 320] [WARNING ] Moderate clustering. Ratio: 1.467
+[13:27:29] [   160.100s] [Step 320] [INFO    ] 
+============================================================
+[13:27:29] [   160.101s] [Step 320] [INFO    ] STRATEGY COMPARISON SUMMARY
+[13:27:29] [   160.101s] [Step 320] [INFO    ] ============================================================
+[13:27:29] [   160.101s] [Step 320] [INFO    ] Last_Token_Last_Layer: Ratio=1.854, Silhouette=0.431 
+[13:27:29] [   160.101s] [Step 320] [INFO    ] Mean_Token_Last_Layer: Ratio=2.303, Silhouette=0.503 ⭐ BEST
+[13:27:29] [   160.102s] [Step 320] [INFO    ] Last_Token_All_Layers_Mean: Ratio=1.687, Silhouette=0.396 
+[13:27:29] [   160.102s] [Step 320] [INFO    ] Mean_Token_All_Layers_Mean: Ratio=1.467, Silhouette=0.305 
+[13:27:29] [   160.103s] [Step 320] [INFO    ] Finalizing experiment...
+[13:27:29] [   160.107s] [Step 320] [SUCCESS ] Results saved to AeLoRu\experiment\log\hidden_states_analysis_v3_20260319_132449.json
+
+============================================================
+Experiment End: 2026-03-19T13:27:29.127386
+Total Time: 160.11s
+Total Steps: 320
+============================================================
+[13:27:29] [   160.108s] [Step 320] [INFO    ] 
+Experiment complete! Best strategy: Mean_Token_Last_Layer
