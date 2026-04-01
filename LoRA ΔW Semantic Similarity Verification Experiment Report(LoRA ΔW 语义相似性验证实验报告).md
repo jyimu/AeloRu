@@ -1,6 +1,7 @@
 # 📊 LoRA ΔW Semantic Similarity Verification Experiment Report
 
 
+[中文](https://github.com/jyimu/AeloRu/blob/main/experiment/log/logMD/LoRA%20%CE%94W%20Semantic%20Similarity%20Verification%20Experiment%20Report_zh.md)
 
 **Repository**: [jyimu/AeloRu](https://github.com/jyimu/AeloRu)  
 **Code Location**: `LoRAΔW/`  
