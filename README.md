@@ -18,7 +18,7 @@ AeloRu is a research framework for investigating **semantic structures in PEFT w
 
 | Phase | Objective | Status |
 |-------|-----------|--------|
-| P0 | Hidden state semantic analysis | 🔄 In Progress |
+| P0 | Hidden state semantic analysis | ✅ Done([Link](https://github.com/jyimu/AeloRu/blob/main/LoRA%20%CE%94W%20Semantic%20Similarity%20Verification%20Experiment%20Report(LoRA%20%CE%94W%20%E8%AF%AD%E4%B9%89%E7%9B%B8%E4%BC%BC%E6%80%A7%E9%AA%8C%E8%AF%81%E5%AE%9E%E9%AA%8C%E6%8A%A5%E5%91%8A).md)) |
 | P1 | W0 weight matrix SVD analysis | 🔄 In Progress |
 | P2 | HiRA-DoRA fusion implementation | 📋 Planned |
 | P3 | Hebbian-RL hybrid learning | 📋 Planned |
