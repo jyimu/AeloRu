@@ -14,7 +14,7 @@ AeloRu is a research framework for investigating **semantic structures in PEFT w
 
 ---
 
-## Research Objectives([the latest progress](https://github.com/jyimu/AeloRu/blob/main/Experimental%20Report%20on%20Semantic%20Analysis%20of%20Hidden%20States(%E9%9A%90%E8%97%8F%E7%8A%B6%E6%80%81%E8%AF%AD%E4%B9%89%E5%88%86%E6%9E%90%E5%AE%9E%E9%AA%8C%E6%8A%A5%E5%91%8A).md))
+## Research Objectives([the latest progress](https://github.com/jyimu/AeloRu/blob/main/LoRA%20%CE%94W%20Semantic%20Similarity%20Verification%20Experiment%20Report(LoRA%20%CE%94W%20%E8%AF%AD%E4%B9%89%E7%9B%B8%E4%BC%BC%E6%80%A7%E9%AA%8C%E8%AF%81%E5%AE%9E%E9%AA%8C%E6%8A%A5%E5%91%8A).md))
 
 | Phase | Objective | Status |
 |-------|-----------|--------|
