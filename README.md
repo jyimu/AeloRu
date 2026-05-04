@@ -1,6 +1,6 @@
 # AeloRu
 
-**A**daptive **e**dge **Lo**w-Rank **U**pdate
+**A**dvanced **E**fficient **L**ow-rank **O**ptimization **R**ule **U**nified
 
 Beyond Low-Rank: Dynamic Plasticity through Amplitude-Direction Decoupling
 
