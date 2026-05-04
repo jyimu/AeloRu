@@ -12,12 +12,12 @@ import matplotlib.pyplot as plt
 from itertools import combinations
 import json
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from tool.aeloru_logger import get_logger, device, LOG_ROOT
 
 # ==================== 配置 ====================
 MODEL_PATH = "models/Qwen2.5-1.5B"
 EXPERIMENT_NAME = "hidden_states_analysis_v3"
+
+
 
 # 扩充后的样本（每类20句）
 with open("AeloRu\\experiment\\tool\\SENTENCES_V3.json", "r") as f:
