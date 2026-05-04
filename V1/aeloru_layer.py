@@ -1,5 +1,5 @@
 """
-Aeloru (Adaptive Elastic Learning with Orthogonal ReLoRA Unit)
+Aeloru (Adaptive Elastic Learning with Orthogonal Robust Units)
 =============================================================
 
 一套面向消费级GPU的LLM实时训练框架，融合：
