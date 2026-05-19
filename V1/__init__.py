@@ -1,5 +1,8 @@
-from .aeloru_layer import HiDoRALayer
+from .aeloru_layer import AeloruConfig , AeloruLayer , inject_aeloru , test_aeloru
 
 __all__ =[
-    HiDoRALayer
+    'AeloruConfig' , 
+    'AeloruLayer' , 
+    'inject_aeloru' , 
+    'test_aeloru'
 ]
