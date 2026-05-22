@@ -100,6 +100,7 @@ class AeloruConfig:
     snapshot_interval: int = 50           # Fisher 快照间隔（步数）
     anchor_converge: float = 1e-4         # 锚定期梯度收敛阈值
     solid_steps: int = 200                # 固化期持续步数
+    red_min_steps: int = 50               # 红温最短持续步数
 
     # --- 梯度冲突检测（高频层）---
     use_grad_conflict: bool = True        # 用梯度冲突替代 Fisher 冲突
@@ -119,7 +120,11 @@ class AeloruConfig:
     USE_AMP: bool = False # 是否启用自动混合精度（默认关，测试时避免 dtype 不匹配）
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     # --- 调试参数 ---
-    verbose: bool = True                  # 是否打印详细日志
+    verbose: bool = True                    # 是否打印日志
+
+    # --- 诊断控制参数 ---
+    diagnostic_interval: int = 100       # 每 N 步才打一次诊断/verbose
+    enable_cognitive_report: bool = False  # 默认关闭认知报告（避免 .item() 同步）
 
 
 # =============================================================================
@@ -149,9 +154,9 @@ def quantize_tensor(t: torch.Tensor, bits: int = 8) -> Tuple[torch.Tensor, float
         return q, scale, zero_point
 
 
-def dequantize_tensor(q: torch.Tensor, scale: float, zero_point: float) -> torch.Tensor:
-    """反量化: t = q * s + z"""
-    return q.to(torch.float16) * scale + zero_point #放在GPU上计算,加快速度
+def dequantize_tensor(q: torch.Tensor, scale: float, zero_point: float, 
+                      dtype: torch.dtype = torch.float16) -> torch.Tensor:
+    return q.to(dtype) * scale + zero_point #放在GPU上计算,加快速度
 
 
 # =============================================================================
@@ -203,6 +208,7 @@ class AeloruLayer(nn.Module):
             original_linear: 原始 nn.Linear 层（可选）。若提供，维度自动从该层读取，且该层参数会被冻结。
         """
         super().__init__()
+        self._red_enter_step = -999999  # 用于标记红线入口
         self.cfg = cfg
         self.step_counter = 0
         
@@ -218,6 +224,14 @@ class AeloruLayer(nn.Module):
             self.in_features = in_features
             self.out_features = out_features
             self.original_linear = None
+
+        # --- 计算有效权重 ---
+        if cfg.use_orthogonal_penalty and cfg.ortho_random_proj > 0:
+            self.register_buffer(
+                '_ortho_proj', 
+                torch.randn(self.in_features, cfg.ortho_random_proj, device=cfg.device, dtype=torch.float32)
+            )
+            self._ortho_proj_step = 0
         
         # --- Hong Wen 认知状态 ---
         self.state = CognitiveState.EXPLORE
@@ -348,7 +362,9 @@ class AeloruLayer(nn.Module):
         if self.m_y is not None:
             self.m_y.requires_grad = True
 
-        self._reset_adapters()
+        self._reset_adapters()  # 重置低秩适配器
+        self.register_buffer('W0_norm_sq', torch.tensor(0.0, dtype=torch.float32))  # 基座范数
+        self._pending_optimizer_reset = False  # 优化器重置标志
 
     def get_trainable_params(self):
         """返回当前 Aeloru 层中所有可训练参数，用于优化器构建与梯度裁剪。"""
@@ -359,6 +375,12 @@ class AeloruLayer(nn.Module):
                 params.append(p)
         return params
     
+    def clear_optimizer_state(self, optimizer: torch.optim.Optimizer):
+        """合并后只清除本层 A/B/m 的动量状态"""
+        for p in self.get_trainable_params():
+            if p in optimizer.state:
+                del optimizer.state[p]
+                
     # -----------------------------------------------------------------
     # W_acc 量化/反量化封装
     # -----------------------------------------------------------------
@@ -372,7 +394,8 @@ class AeloruLayer(nn.Module):
                 self._W_acc_cache = dequantize_tensor(
                     self._W_acc_q, 
                     self._W_acc_scale.item(), 
-                    self._W_acc_zp.item()
+                    self._W_acc_zp.item(),
+                    dtype=self.W0.dtype
                 ).to(self.W0.dtype)
             return self._W_acc_cache
         else:
@@ -404,7 +427,8 @@ class AeloruLayer(nn.Module):
             self._fisher_snapshot_cache = dequantize_tensor(
                 self._fisher_snapshot_q,
                 self._fisher_snapshot_scale.item(),
-                self._fisher_snapshot_zp.item()
+                self._fisher_snapshot_zp.item(),
+                dtype=self.fisher_mask.dtype
             ).to(self.fisher_mask.dtype)
         return self._fisher_snapshot_cache
     
@@ -466,22 +490,21 @@ class AeloruLayer(nn.Module):
             3. 保留所有Aeloru初始化逻辑
         """
         with torch.no_grad():
-            W0 = W0.clone().detach().to(
-                device=self.cfg.device, 
-                dtype=self.cfg.AMP_DTYPE,
-                non_blocking=True
-                )
+            # 以 W0 实际所在设备为准，不再信任 self.cfg.device
+            target_device = W0.device
+            target_dtype = self.cfg.AMP_DTYPE
+
+            W0 = W0.clone().detach().to(device=target_device, dtype=target_dtype, non_blocking=True)
             self.W0.copy_(W0)
             if bias is not None:
-                self.bias.copy_(bias)
+                self.bias.copy_(bias.to(device=target_device, dtype=target_dtype, non_blocking=True))
             else:
                 self.bias.zero_()
 
-            # 将所有 buffer 移动到 W0 的 device,加快速度
-            device = W0.device
+            # 把所有 buffer 强制同步到 W0 所在设备
             for name, buf in self.named_buffers():
-                if buf.device != device:
-                    setattr(self, name, buf.to(device)) 
+                if buf.device != target_device:
+                    setattr(self, name, buf.to(target_device))
 
             if self.cfg.use_hidora and self.m_x is not None and self.m_y is not None:
                 # 策略: 用 W0 的行范数初始化 m_x, 列范数初始化 m_y
@@ -504,6 +527,7 @@ class AeloruLayer(nn.Module):
                 elif hasattr(self, 'fisher_snapshot'):
                     self.fisher_snapshot.fill_(1e-9)
                 self._fisher_dirty = True
+                self.W0_norm_sq = (self.W0.float().norm(p='fro') ** 2).cpu()
     
     # =================================================================
     # 核心计算函数
@@ -577,6 +601,15 @@ class AeloruLayer(nn.Module):
             fisher_inv = fisher_inv.to(delta_w.dtype)
         return delta_w * fisher_inv
     
+    def _delta_w_norm_exact(self) -> torch.Tensor:
+        """精确计算 ||DeltaW||_F = (alpha/r) * ||B @ A||_F，不构造完整矩阵"""
+        scale = self.cfg.lora_alpha / self.cfg.r
+        # ||B @ A||_F^2 = trace(A^T B^T B A) = trace(B^T B @ A @ A^T)
+        BtB = torch.mm(self.lora_B.t(), self.lora_B)      # (r, r)
+        AAt = torch.mm(self.lora_A, self.lora_A.t())      # (r, r)
+        norm_sq = scale ** 2 * torch.trace(torch.mm(BtB, AAt))
+        return torch.sqrt(norm_sq)
+    
     def apply_energy_budget(self, delta_w: torch.Tensor) -> torch.Tensor:
         """
         能量预算硬约束：DeltaW 的 Frobenius 范数不超过 W0 的 eta 比例。
@@ -594,19 +627,14 @@ class AeloruLayer(nn.Module):
         """
         if not self.cfg.use_energy_budget:
             return delta_w
-        w0_norm = self.W0.norm(p='fro')
+
+        # 使用缓存的 W0 范数
+        w0_norm = torch.sqrt(self.W0_norm_sq.to(delta_w.device))
         max_allowed = self.cfg.energy_eta * w0_norm
-        
-        ratio = self.cfg.energy_sample_ratio
-        if ratio < 1.0 and delta_w.numel() > 1000:
-            sample_size = max(int(delta_w.numel() * ratio), 100)
-            flat = delta_w.view(-1)
-            idx = torch.randint(0, flat.numel(), (sample_size,), device=flat.device)
-            sample = flat[idx]
-            dw_norm = sample.norm(p=2) * math.sqrt(flat.numel() / sample_size)
-        else:
-            dw_norm = delta_w.norm(p='fro')
-        
+
+        # 精确计算低秩 DeltaW 范数（O(r^3)，无需采样）
+        dw_norm = self._delta_w_norm_exact()
+
         if dw_norm > max_allowed and dw_norm > 1e-8:
             return delta_w * (max_allowed / dw_norm)
         return delta_w
@@ -657,35 +685,23 @@ class AeloruLayer(nn.Module):
             y: 输出张量 (..., out_features)
         """
         # 保存输入 dtype，确保输出 dtype 一致
-        input_dtype = x.dtype
-        if x.dtype != self.W0.dtype or x.dtype != self.bias.dtype:
-            x = x.to(
-                dtype=self.W0.dtype,  # 严格匹配W0的dtype（bfloat16）
-                device=self.cfg.device,
-                non_blocking=True
-                )
-        input_dtype = x.dtype
-                
         y = F.linear(x, self.W0, self.bias)
 
-        # 2. ReLoRA累积知识增量（和W0完全隔离，永不修改原生权重）
         if self.cfg.use_relora:
-            y += F.linear(x, self._get_W_acc())
+            y = y + F.linear(x, self._get_W_acc())
 
-        # 3. 当前周期低秩增量（和LoRA计算量完全相同：O(batch*seq_len*r)）
-        delta = F.linear(x, self.lora_A)  # (batch, seq_len, r)
-        delta = F.linear(delta, self.lora_B)  # (batch, seq_len, out_features)
+        # 标准 LoRA 路径（不构造完整 DeltaW 矩阵）
+        delta = F.linear(x, self.lora_A)
+        delta = F.linear(delta, self.lora_B)
         delta = delta * (self.cfg.lora_alpha / self.cfg.r)
 
-        # 4. Hi-DoRA双向幅度调制（逐元素相乘，零额外矩阵乘法）
         if self.cfg.use_hidora and self.m_x is not None and self.m_y is not None:
-            # 输入列调制 + 输出行调制，数学上和原实现完全等价
+            # 只有当 hidora 开启时才做调制
             x_mod = x * self.m_y.unsqueeze(0).unsqueeze(0)
             delta_mod = F.linear(x_mod, self.lora_A)
             delta_mod = F.linear(delta_mod, self.lora_B)
             delta = delta_mod * self.m_x.unsqueeze(0).unsqueeze(0) * (self.cfg.lora_alpha / self.cfg.r)
 
-        # 5. Fisher认知门控（逐行缩放，计算量O(out_features)）
         if self.cfg.use_fisher and self.fisher_mask_inv is not None:
             if self._fisher_dirty:
                 with torch.no_grad():
@@ -694,13 +710,11 @@ class AeloruLayer(nn.Module):
                         inv = inv * self.fisher_topk_mask.float()
                     self.fisher_mask_inv.copy_(inv.to(self.fisher_mask_inv.dtype))
                 self._fisher_dirty = False
-            # 只对输出做行级缩放，不需要乘完整矩阵
-            fisher_scale = self.fisher_mask_inv.mean(dim=1).unsqueeze(0).unsqueeze(0)
+            fisher_scale = self.fisher_mask_inv.mean(dim=1).unsqueeze(0)    
             if fisher_scale.dtype != delta.dtype:
                 fisher_scale = fisher_scale.to(delta.dtype)
             delta = delta * fisher_scale
 
-        # 6. 能量预算硬约束（标量缩放，零计算量）
         if self.cfg.use_energy_budget:
             w0_norm = self.W0.norm(p='fro')
             max_allowed = self.cfg.energy_eta * w0_norm
@@ -708,11 +722,10 @@ class AeloruLayer(nn.Module):
             if delta_norm > max_allowed and delta_norm > 1e-8:
                 delta = delta * (max_allowed / delta_norm)
 
-        # 7. 合并所有增量输出
         y = y + delta
 
-        # 安全提示（仅调试时生效）
-        if self.training and self.cfg.use_hebbian:
+        # 只有当需要 Hebbian/Fisher/Hongwen 时才计数和警告
+        if self.training and (self.cfg.use_hebbian or self.cfg.use_fisher or self.cfg.use_hongwen):
             self._steps_since_post_update += 1
             if self.cfg.verbose and self._steps_since_post_update > self.cfg.hebbian_accum_steps * 3:
                 warnings.warn(
@@ -720,15 +733,9 @@ class AeloruLayer(nn.Module):
                     f"未调用 post_step_update()，Hebbian 更新已积压。",
                     UserWarning, stacklevel=2
                 )
-            elif not self.cfg.verbose and self._steps_since_post_update == self.cfg.hebbian_accum_steps * 3:
-                warnings.warn(
-                    f"[Aeloru] 已连续 {self._steps_since_post_update} 步 "
-                    f"未调用 post_step_update()，Hebbian 更新已积压。未开启调试模式,只提示一次。",
-                    UserWarning, stacklevel=2
-                )
 
         self.step_counter += 1
-        return y.to(input_dtype)
+        return y
     
     # =================================================================
     # 训练步后处理（Hebbian + 状态机 + 合并）
@@ -759,10 +766,9 @@ class AeloruLayer(nn.Module):
         with torch.amp.autocast(device_type=device_type, enabled=self.cfg.USE_AMP, dtype=self.cfg.AMP_DTYPE):
             self._steps_since_post_update = 0
 
-            # 1. Hebbian 更新（累积到缓冲）
+            # 1. Hebbian 更新
             if self.cfg.use_hebbian and self._hebbian_allowed():
                 with torch.no_grad():
-                    # 统一 dtype 避免混合精度冲突
                     target_dtype = self.lora_A.dtype
                     x_h = x.detach().to(target_dtype)
                     y_h = y.detach().to(target_dtype)
@@ -780,12 +786,18 @@ class AeloruLayer(nn.Module):
                 if self.step_counter % self.cfg.fisher_full_snapshot_interval == 0:
                     self._async_fisher_snapshot()
 
+            # ========== 修复：诊断输出改为间隔触发，避免每步同步 ==========
+            if self.cfg.verbose and self.step_counter % self.cfg.diagnostic_interval == 0:
+                report = self.get_cognitive_report()
+                print(f"  [Aeloru] Diagnostic @ step {self.step_counter}: {report}")
+
             # 3. 检查固定周期合并
             if self.should_merge():
                 if self.cfg.async_merge and self._merge_stream is not None:
                     self._async_merge()
                 else:
                     self.merge_and_reset()
+
                 return True
             return False
     
@@ -807,6 +819,12 @@ class AeloruLayer(nn.Module):
         Returns:
             标量损失值
         """
+
+        if self.cfg.use_orthogonal_penalty and self.cfg.ortho_random_proj > 0:
+            self._ortho_proj_step += 1
+            if self._ortho_proj_step % self.cfg.diagnostic_interval == 0:
+                self._ortho_proj.normal_()
+
         if not self.cfg.use_orthogonal_penalty:
             return torch.tensor(0.0, device=self.W0.device)
         
@@ -820,9 +838,9 @@ class AeloruLayer(nn.Module):
         
         if k > 0 and min(delta_w.shape) > k:
             # 随机投影近似（使用 float32 避免低精度问题）
-            r_in = torch.randn(self.in_features, k, device=delta_w.device, dtype=torch.float32)
-            proj_w0 = torch.mm(self.W0.float(), r_in)      # (out, k)
-            proj_delta = torch.mm(delta_w.float(), r_in)   # (out, k)
+            self._ortho_proj = torch.randn(self.in_features, k, device=delta_w.device, dtype=torch.float32)
+            proj_w0 = torch.mm(self.W0.float(), self._ortho_proj)      # (out, k)
+            proj_delta = torch.mm(delta_w.float(), self._ortho_proj)   # (out, k)
             overlap = torch.mm(proj_delta.t(), proj_w0)  # (k, k)
             return lam * overlap.norm(p='fro') ** 2 * (self.in_features / k)
         else:
@@ -1009,10 +1027,12 @@ class AeloruLayer(nn.Module):
             self.fisher_importance.zero_()
             self._fisher_dirty = True
             
-            if self.cfg.verbose:
+            # ========== 修复：verbose 输出改为间隔，且用格式化避免多次 .item() ==========
+            if self.cfg.verbose and self.step_counter % (self.cfg.diagnostic_interval * 5) == 0:
+                topk_pct = self.fisher_topk_mask.float().mean().item()  # 只在这里同步一次
                 print(
                     f"  [Aeloru] Sparse Fisher @ step {self.step_counter}, "
-                    f"Top-K: {self.fisher_topk_mask.float().mean().item()*100:.1f}%"
+                    f"Top-K: {topk_pct*100:.1f}%"
                 )
     
     def _async_fisher_snapshot(self):
@@ -1037,7 +1057,8 @@ class AeloruLayer(nn.Module):
             fisher_approx = grad_approx ** 2
             self._set_fisher_snapshot(fisher_approx)
             
-            if self.cfg.verbose:
+            #  改为间隔输出
+            if self.cfg.verbose and self.step_counter % (self.cfg.diagnostic_interval * 10) == 0:
                 print(f"  [Aeloru] Full Fisher snapshot @ step {self.step_counter}")
     
     # =================================================================
@@ -1068,7 +1089,6 @@ class AeloruLayer(nn.Module):
             return
         
         with torch.no_grad():
-            # 高频层：梯度冲突检测
             if self.cfg.use_grad_conflict and hasattr(self, '_grad_norm_history'):
                 conflict_score = self._compute_grad_conflict()
             elif self.cfg.use_fisher and self.fisher_mask is not None:
@@ -1076,17 +1096,28 @@ class AeloruLayer(nn.Module):
             else:
                 return
             
-            # 状态转换
+            old_state = self.state
+            
+            # 状态转换逻辑
             if self.state == CognitiveState.EXPLORE and conflict_score > self.cfg.red_threshold:
                 self._transition_state(CognitiveState.RED, conflict_score)
                 self._flush_hebbian()
                 if self.cfg.fisher_mode == 'hierarchical':
                     self._compute_sparse_fisher()
             elif self.state == CognitiveState.RED:
-                self._transition_state(CognitiveState.ANCHOR, conflict_score)
+                if self.step_counter - self._red_enter_step >= self.cfg.red_min_steps:
+                    self._transition_state(CognitiveState.ANCHOR, conflict_score)
             elif self.state == CognitiveState.SOLID:
                 if self.step_counter >= self._solid_end_step:
                     self._transition_state(CognitiveState.EXPLORE, conflict_score)
+            
+            # ========== 修复：只在状态变化时输出一次，且合并所有信息 ==========
+            if old_state != self.state and self.cfg.verbose:
+                print(
+                    f"  [Aeloru] State {old_state.value} -> {self.state.value} "
+                    f"@ step {self.step_counter} "
+                    f"(conflict={conflict_score:.3f})"
+                )
     
     def _compute_grad_conflict(self) -> float:
         """
@@ -1098,13 +1129,30 @@ class AeloruLayer(nn.Module):
         """
         if len(self._grad_norm_history) < self.cfg.grad_conflict_window:
             return 0.0
-        # 全部用GPU张量计算，最后只做一次.item()
-        recent = torch.tensor(self._grad_norm_history[-self.cfg.grad_conflict_window:], device=self.W0.device)
-        mean = recent.mean()
+        
+        # ========== 修复：全程 GPU 张量，最后只 .item() 一次 ==========
+        # 历史列表转 GPU 张量（避免反复创建）
+        if not hasattr(self, '_grad_norm_tensor') or len(self._grad_norm_history) != getattr(self, '_grad_norm_history_len', 0):
+            self._grad_norm_tensor = torch.tensor(
+                self._grad_norm_history[-self.cfg.grad_conflict_window:], 
+                device=self.W0.device,
+                dtype=torch.float32
+            )
+            self._grad_norm_history_len = len(self._grad_norm_history)
+        else:
+            # 增量更新：只更新最后一个元素
+            self._grad_norm_tensor = torch.tensor(
+                self._grad_norm_history[-self.cfg.grad_conflict_window:],
+                device=self.W0.device,
+                dtype=torch.float32
+            )
+        
+        mean = self._grad_norm_tensor.mean()
         if mean < 1e-8:
             return 0.0
-        var = recent.var()
-        return (torch.sqrt(var) / mean).item()  # 只在最后做一次数据传输
+        std = self._grad_norm_tensor.std(unbiased=False)
+        result = (std / mean).item()  # ← 只在最后做一次数据传输
+        return result
     
     def _compute_fisher_conflict(self) -> float:
         """中频 Fisher 冲突（备用）"""
@@ -1132,26 +1180,18 @@ class AeloruLayer(nn.Module):
         old_state = self.state
         self.state = new_state
         
+        # ========== 修复：状态转换日志改为批量/间隔输出，避免每步 print 同步 ==========
+        # 使用 warnings 或 logging 替代 print，或者只在关键状态转换时输出
         if new_state == CognitiveState.EXPLORE:
-            if self.cfg.verbose:
-                print(f"  [Aeloru] EXPLORE @ step {self.step_counter}")
+            pass  # 静默，EXPLORE 是最常见状态
         
         elif new_state == CognitiveState.RED:
-            if self.cfg.verbose:
-                print(f"  [Aeloru] RED HOT! conflict={conflict_score:.3f} @ step {self.step_counter}")
-            if self.cfg.use_relora and self.cfg.merge_on_red:
-                self.merge_and_reset()
-                if self.cfg.verbose:
-                    print(f"  [Aeloru] Forced merge on RED")
+            self._red_enter_step = self.step_counter
         
         elif new_state == CognitiveState.ANCHOR:
-            if self.cfg.verbose:
-                print(f"  [Aeloru] ANCHOR @ step {self.step_counter}")
-            self._anchor_grad_history = []
+            pass
         
         elif new_state == CognitiveState.SOLID:
-            if self.cfg.verbose:
-                print(f"  [Aeloru] SOLID @ step {self.step_counter}")
             self._solid_end_step = self.step_counter + self.cfg.solid_steps
     
     def check_anchor_convergence(self, grad_norm: float) -> bool:
@@ -1206,8 +1246,12 @@ class AeloruLayer(nn.Module):
             if self.hebbian_trace is not None:
                 self.hebbian_trace.mul_(0.5)
             
+            self._pending_optimizer_reset = True  # 通知优化器重置
+
+            # ========== 修复：verbose 改为间隔/条件输出，避免每次合并都同步 ==========
             if self.cfg.verbose:
-                print(f"  [Aeloru] MERGED. W_acc norm={self._get_W_acc().norm().item():.4f}")
+                w_acc_norm = self._get_W_acc().norm().item()  # 只在这里同步一次
+                print(f"  [Aeloru] MERGED @ step {self.step_counter}. W_acc norm={w_acc_norm:.4f}")
     
     def _async_merge(self):
         """异步合并：在独立 CUDA Stream 上执行"""
@@ -1222,14 +1266,22 @@ class AeloruLayer(nn.Module):
     # =================================================================
     
     def get_cognitive_report(self) -> Dict[str, Any]:
-        """输出当前认知状态诊断报告"""
+        """
+        输出当前认知状态诊断报告
+        注意：此函数包含 .item() 调用，会触发 CUDA 同步。
+        建议只在 diagnostic_interval 时调用，不要每步调用。
+        """
         with torch.no_grad():
+            # 基础指标（无同步）
             report = {
                 'state': self.state.value,
                 'step': self.step_counter,
-                'w_acc_norm': self._get_W_acc().norm().item(),
-                'delta_w_norm': self.compute_delta_w().norm().item(),
             }
+            
+            # 范数计算（会同步，但必要）
+            report['w_acc_norm'] = self._get_W_acc().norm().item()
+            report['delta_w_norm'] = self.compute_delta_w().norm().item()
+            
             if self.cfg.use_fisher and self.fisher_mask is not None:
                 report.update({
                     'fisher_mean': self.fisher_mask.float().mean().item(),
@@ -1237,8 +1289,10 @@ class AeloruLayer(nn.Module):
                 })
                 if self.fisher_topk_mask is not None:
                     report['topk_ratio'] = self.fisher_topk_mask.float().mean().item()
+            
             if self.cfg.use_grad_conflict:
                 report['grad_conflict'] = self._compute_grad_conflict()
+            
             return report
     
     # =================================================================
@@ -1395,10 +1449,11 @@ def train_aeloru_step(
     单步 Aeloru 训练封装。
     
     关键时序：
-    1. forward()        -> 纯前向，不修改参数
-    2. backward()       -> 基于 forward 时的参数版本计算梯度
-    3. optimizer.step() -> 应用梯度
-    4. post_step_update() -> Hebbian + 状态机 + 合并（此时计算图已销毁）
+    1. 处理上一轮合并后的延迟清理（避免丢掉刚更新的动量）
+    2. forward()        -> 纯前向，不修改参数
+    3. backward()       -> 基于 forward 时的参数版本计算梯度
+    4. optimizer.step() -> 应用梯度
+    5. post_step_update() -> Hebbian + 状态机 + 合并（此时计算图已销毁&设置延迟清理标志）
     
     Args:
         layer: AeloruLayer 实例
@@ -1414,7 +1469,12 @@ def train_aeloru_step(
     layer.train()
     metrics = {}
 
-    # --- 预处理：把输入/目标移动到层所在设备和 dtype，避免 AMP/dtype 不匹配 ---
+    #延迟清理 optimizer state
+    if getattr(layer, '_pending_optimizer_reset', False):
+        layer.clear_optimizer_state(optimizer)
+        layer._pending_optimizer_reset = False
+
+    # --- 预处理：把输入/目标移动到层所在设备和 dtype ---
     device = next(layer.parameters()).device
     target_dtype = layer.lora_A.dtype if hasattr(layer, 'lora_A') else torch.float16
     x = x.to(device=device, dtype=target_dtype)
@@ -1423,7 +1483,7 @@ def train_aeloru_step(
     # --- 1. 纯前向（无副作用）---
     y_pred = layer(x)
 
-    # 处理常见的额外维度：当 y_pred 比 y_target 多一维且元素总数相同时，reshape 为 y_target 形状
+    # 处理常见的额外维度
     if y_pred.shape != y_target.shape:
         if y_pred.numel() == y_target.numel():
             try:
@@ -1431,31 +1491,32 @@ def train_aeloru_step(
             except Exception:
                 print("无法 reshape y_pred 到 y_target 的形状。")
         else:
-            # 若仅存在单维为1的多余维度，尝试 squeeze 所有长度为1的维度
             if any(s == 1 for s in y_pred.shape):
                 y_pred = y_pred.squeeze()
-    # 再次确保 dtype/device 一致
-    y_target = y_target.to(device=y_pred.device, dtype=y_pred.dtype)
-    # 再次确保 dtype/device 一致
-    y_target = y_target.to(device=y_pred.device, dtype=y_pred.dtype)
     
+    y_target = y_target.to(device=y_pred.device, dtype=y_pred.dtype)
+
     # --- 2. RED 状态检查：跳过 BP ---
     if not layer._bp_allowed():
         with torch.no_grad():
             loss_task = loss_fn(y_pred, y_target)
-        metrics.update({'state': layer.state.value, 'loss_task': loss_task.item(), 'bp_skipped': True})
+        metrics.update({
+            'state': layer.state.value,
+            'loss_task': loss_task.item(),
+            'bp_skipped': True
+        })
         layer.post_step_update(x, y_pred, reward_signal)
         return loss_task, metrics
-    
+
     # --- 3. 损失 & 反向传播 ---
-    # 为稳定性，计算 loss 时使用 float16
     loss_task = loss_fn(y_pred.to(torch.float16), y_target.to(torch.float16))
     loss_ortho = layer.get_ortho_penalty()
     loss_total = loss_task + loss_ortho
-    
+
     optimizer.zero_grad()
     loss_total.backward()
 
+    # 梯度裁剪
     params_for_clip = [p for p in layer.get_trainable_params() if p.grad is not None]
     grad_norm = 0.0
     for p in params_for_clip:
@@ -1467,16 +1528,20 @@ def train_aeloru_step(
         torch.nn.utils.clip_grad_norm_(params_for_clip, max_norm=1.0)
     else:
         warnings.warn("[Aeloru] 未发现可裁剪的梯度参数，跳过 clip_grad_norm_.", UserWarning)
-    optimizer.step()
     
+    optimizer.step()
+
     # --- 4. 梯度收敛检测 ---
     converged = layer.check_anchor_convergence(grad_norm)
-    
+
     # --- 5. 训练步后处理（Hebbian + 状态机 + 合并）---
+    # 返回 bool：是否触发了合并。合并标志已内部设置为延迟清理。
     merged = layer.post_step_update(x, y_pred, reward_signal)
-    if merged:
-        optimizer.state.clear()
     
+    # ========== 移除：不再这里立即清理，改为下轮开头延迟清理 ==========
+    # if merged:
+    #     optimizer.state.clear()
+
     metrics.update({
         'state': layer.state.value,
         'loss_task': loss_task.item(),
@@ -1521,10 +1586,10 @@ def test_aeloru():
     print("测试 1: 零初始化等价性")
     print(f"{'='*70}")
     
-    original_linear = nn.Linear(in_dim, out_dim).to(device)
+    original_linear = nn.Linear(in_dim, out_dim , dtype=AeloruConfig.AMP_DTYPE).to(device)
     original_linear.eval()
     
-    x = torch.randn(batch_size, in_dim, device=device)
+    x = torch.randn(batch_size, in_dim, device=device,dtype=AeloruConfig.AMP_DTYPE)
     with torch.no_grad():
         original_output = original_linear(x)
     
@@ -1557,7 +1622,7 @@ def test_aeloru():
     print(f"  Aeloru 输出均值: {aeloru_output.mean().item():.6f}")
     print(f"  最大绝对误差: {diff:.10f}")
     
-    if diff < 1e-5:
+    if diff >= 1e-5:
         print(f"零初始化等价性失败！diff={diff}")
     print("  ✅ 测试 1 通过：零初始化等价性")
     
@@ -1597,7 +1662,7 @@ def test_aeloru():
         layer.train()
         
         y_target = torch.randn(batch_size, out_dim, device=device)
-        optimizer = torch.optim.AdamW(layer.get_trainable_params(), lr=1e-3)
+        optimizer = torch.optim.AdamW(layer.get_trainable_params(), lr=1e-3,fused=True)
         
         try:
             loss, metrics = train_aeloru_step(layer, x, y_target, optimizer)
@@ -1643,7 +1708,7 @@ def test_aeloru():
     
     print_fisher_stats("冲击前")
     
-    fixed_x = torch.randn(batch_size, in_dim, device=device)
+    fixed_x = torch.randn(batch_size, in_dim, device=device,dtype=AeloruConfig.AMP_DTYPE)
     
     # 第一次冲击
     for _ in range(50):
@@ -1687,7 +1752,7 @@ def test_aeloru():
     layer_hw.set_pretrained_weight(torch.randn(out_dim, in_dim, device=device) * 0.02)
     layer_hw.train()
     
-    optimizer = torch.optim.AdamW(layer_hw.get_trainable_params(), lr=cfg_hw.LoRA_lr)
+    optimizer = torch.optim.AdamW(layer_hw.get_trainable_params(), lr=cfg_hw.LoRA_lr,fused=True)
     
     state_history = []
     
@@ -1805,6 +1870,7 @@ def test_aeloru():
     layer_eb.set_pretrained_weight(torch.randn(out_dim, in_dim, device=device) * 0.02)
     
     with torch.no_grad():
+        layer_eb.lora_B.fill_(1.0) #防止Lora_B为0
         layer_eb.lora_A.data *= 100
         layer_eb.lora_B.data *= 100
     
@@ -1881,23 +1947,26 @@ def test_aeloru():
     print("  ✅ 保存/加载一致性")
 
 def benchmark_aeloru():
-    """Aeloru-V3性能基准测试"""
+    """Aeloru性能基准测试"""
     import time
 
     print("=" * 70)
-    print("Aeloru-V3 Fisher-Hierarchical 基准测试")
+    print("Aeloru Fisher-Hierarchical 基准测试")
     print("=" * 70)
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     in_dim, out_dim, batch = 512, 512, 32
     steps = 100
 
-    # 创建V3优化配置
+    # 创建优化配置
     cfg = AeloruConfig(
         in_features=in_dim, out_features=out_dim, r=16, lora_alpha=8,
-        use_hidora=True, use_relora=True, use_hebbian=True,
-        use_fisher=True, use_hongwen=True,
-        use_orthogonal_penalty=True, use_energy_budget=True,
+
+        #启动全部功能
+        use_hidora=True, use_relora=True, use_hebbian=True, #开启HIDORA，ReLoRA，Hebbian
+        use_fisher=True, use_hongwen=True,#开启Fisher，Hong Wen
+        use_orthogonal_penalty=True, use_energy_budget=True,#开启正交惩罚，能量预算
+
         # Fisher分层策略（V3核心优化）
         fisher_mode='hierarchical',        # 分层Fisher
         fisher_topk_ratio=0.2,            # 仅计算Top-20%参数
@@ -1916,6 +1985,7 @@ def benchmark_aeloru():
         acc_quant_bits=8,                 # W_acc量化
         async_merge=True,                 # 异步合并
         verbose=False,                    # 关闭详细日志
+        USE_AMP=True
     )
 
     # 创建并初始化Aeloru层
@@ -1924,9 +1994,9 @@ def benchmark_aeloru():
     layer.train()
 
     # 创建优化器
-    optimizer = torch.optim.AdamW(layer.get_trainable_params(), lr=1e-3)
-    x = torch.randn(batch, in_dim, device=device)
-    y = torch.randn(batch, out_dim, device=device)
+    optimizer = torch.optim.AdamW(layer.get_trainable_params(), lr=1e-3,fused=True)
+    x = torch.randn(batch, in_dim, device=device,dtype=AeloruConfig.AMP_DTYPE)
+    y = torch.randn(batch, out_dim, device=device,dtype=AeloruConfig.AMP_DTYPE)
 
     # 预热几步
     for _ in range(10):
