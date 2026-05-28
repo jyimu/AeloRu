@@ -670,8 +670,7 @@ def run_experiment():
           f"Effective: {TRAIN_CFG.batch_size * TRAIN_CFG.grad_accum_steps}")
 
     # 建议测试方法：全基线 + Aeloru 双模式
-    # methods = ["LoRA", "DoRA", "ReLoRA", "Aeloru-Base", "Aeloru-Full"]
-    methods = ["Aeloru-Full"]
+    methods = ["LoRA", "DoRA", "ReLoRA", "Aeloru-Base", "Aeloru-Full"]
     # methods = ["Aeloru-Full"]  # 单独调试时可只跑一个
     
     results = {}
