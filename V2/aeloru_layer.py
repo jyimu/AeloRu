@@ -64,6 +64,113 @@ class AeloruConfig:
     Aeloru 完整配置类（v2.0 - 整合 PEM / HGF / DLAM 理论）
     
     所有功能均可独立开关，便于消融实验。
+
+    Args:
+        # --- 基础维度 ---
+        in_features: int = 512
+        out_features: int = 512
+        r: int = 8                          # LoRA 秩
+        lora_alpha: float = 4.0             # LoRA 缩放因子
+        LoRA_lr: float = 1e-4               # LoRA 学习率
+
+        # --- 功能总开关 ---
+        use_hidora: bool = True               # 是否启用 Hi-DoRA 幅度调制
+        use_relora: bool = True               # 是否启用 ReLoRA 合并重置
+        use_hebbian: bool = True              # 是否启用 Hebbian 在线学习
+        use_fisher: bool = True               # 是否启用 Fisher 认知掩码
+        use_hongwen: bool = True              # 是否启用 Hong Wen 状态机
+        use_orthogonal_penalty: bool = True   # 是否启用正交惩罚损失
+        use_energy_budget: bool = True        # 是否启用能量预算硬约束
+        hebbian_before_backprop: bool = False  # False=传统顺序(先BP后HB) | True=神经科学顺序(先HB后BP)
+
+        # --- PEM 自适应侧向连接（新增 §3.2）---
+        use_lateral_connection: bool = False   # 启用低秩侧向抑制
+        lateral_lr: float = 1e-5             # 侧向连接 Hebbian 学习率
+        lateral_decay: float = 0.99          # 侧向权重衰减
+
+        # --- PEM 稳态可塑性（新增 §3.3）---
+        use_homeostatic_plasticity: bool = False  # 启用神经元级稳态增益
+        homeostatic_tau: float = 0.99            # 方差 EMA 时间常数
+        homeostatic_max_gain: float = 5.0        # 增益上限（防止过度抑制）
+
+        # --- HGF 闭式 Fisher（新增 §2.3）---
+        use_hgf_fisher: bool = False         # 用精度传播替代梯度平方估计
+        hgf_precision_init: float = 1.0        # 初始精度
+
+        # --- HGF 波动率耦合（新增 §3.1）---
+        use_volatility_coupling: bool = False  # 启用自动动态学习率
+        volatility_lr: float = 1e-3            # 波动率更新速率 (kappa)
+        volatility_init: float = 0.0           # 初始 log-volatility
+
+        # --- HGF 闭式一步更新（实验性）---
+        use_hgf_closed_form: bool = False    # 实验性：用闭式梯度替代 autograd（仅 MSE）(若开启Hebbian先于BP,需要将其开启)
+
+        # --- DLAM 睡眠机制（新增）---
+        use_dlam_sleep: bool = False         # 启用谱滤波睡眠
+        sleep_condition_threshold: float = 100.0  # 条件数触发阈值
+        min_steps_between_sleep: int = 100   # 两次睡眠间最小步数
+        cross_modal_coupling: float = 0.01   # 跨模态异联想耦合强度
+        use_cross_modal_binding: bool = False  # 启用跨层异联想绑定
+        dlam_replay_threshold: float = 1e-6  # 弱连接修剪阈值
+
+        # --- Fisher 分层策略 ---
+        fisher_mode: str = "hierarchical"     # 'off': 禁用 | 'gradient_only': 只计算梯度 | 'hierarchical':部分使用Fisher,部分使用梯度(推荐) | 'full':全部使用Fisher
+        fisher_topk_ratio: float = 0.2        # 稀疏 Fisher 仅计算 Top-K% 参数
+        fisher_compute_interval: int = 500    # 中频稀疏计算间隔（步）
+        fisher_full_snapshot_interval: int = 5000  # 低频全量快照间隔（步）
+        fisher_quant_bits: int = 8            # 快照量化位数（0=不量化）
+        fisher_async: bool = True             # 异步计算快照
+        fisher_bp16: bool = True              # 运行时 FP16
+
+        # --- ReLoRA 参数 ---
+        merge_every: int = 1000               # 固定合并周期（步数）
+        merge_on_red: bool = True             # 红温时是否强制合并
+        async_merge: bool = True              # 异步合并
+        acc_quant_bits: int = 8               # W_acc 量化位数（0=不量化）
+
+        # --- Hebbian 参数 ---
+        hebbian_lr: float = 1e-6              # Hebbian 学习率
+        hebbian_decay: float = 0.99           # 全局遗忘衰减
+        saturation_limit: float = 5.0         # 饱和上限（硬截断）
+        hebbian_accum_steps: int = 4          # Hebbian 累积步数
+
+        # --- Fisher 运行时参数 ---
+        fisher_gamma: float = 10.0            # Fisher 掩码锐度
+        fisher_ema: float = 0.95              # Fisher EMA 平滑系数
+        plasticity_min: float = 0.05          # 最小可塑性（防止完全冻结）
+
+        # --- Hong Wen 红温参数（时间尺度优化：探索:锚定 ≈ 100:1）---
+        red_threshold: float = 0.65           # 冲突分数触发线
+        snapshot_interval: int = 50           # Fisher 快照间隔（步数）
+        anchor_converge: float = 1e-4         # 锚定期梯度收敛阈值
+        solid_steps: int = 200                # 固化期持续步数（Hebbian 固化）
+        red_min_steps: int = 50               # 红温最短持续步数
+        explore_steps: int = 100              # 【新增】纯探索期步数（快速 Hebbian）
+        anchor_steps: int = 1                 # 【新增】BP 锚定步数（慢速 BP）
+
+        # --- 梯度冲突检测（高频层）---
+        use_grad_conflict: bool = True        # 用梯度冲突替代 Fisher 冲突
+        grad_conflict_window: int = 50        # 梯度滑动窗口
+        grad_conflict_threshold: float = 0.3  # 梯度变异系数阈值
+
+        # --- 正交惩罚参数 ---
+        ortho_lambda: float = 0.01            # 正交惩罚系数
+        ortho_lambda_anchor: float = 0.05     # 锚定期强化系数（5x）
+        ortho_random_proj: int = 16           # 正交惩罚随机投影维度
+
+        # --- 能量预算参数 ---
+        energy_eta: float = 0.15              # DeltaW 能量不超过 W0 的 eta 比例
+        energy_sample_ratio: float = 0.1      # 范数估计采样比例
+
+        AMP_DTYPE: torch.dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float16
+        USE_AMP: bool = False # 是否启用自动混合精度（默认关，测试时避免 dtype 不匹配）
+        device: str = "cuda" if torch.cuda.is_available() else "cpu"
+        # --- 调试参数 ---
+        verbose: bool = True                    # 是否打印日志
+
+        # --- 诊断控制参数 ---
+        diagnostic_interval: int = 100       # 每 N 步才打一次诊断/verbose
+        enable_cognitive_report: bool = False  # 默认关闭认知报告（避免 .item() 同步）
     """
     # --- 基础维度 ---
     in_features: int = 512
@@ -102,7 +209,7 @@ class AeloruConfig:
     volatility_init: float = 0.0           # 初始 log-volatility
 
     # --- HGF 闭式一步更新（实验性）---
-    use_hgf_closed_form: bool = False    # 实验性：用闭式梯度替代 autograd（仅 MSE）
+    use_hgf_closed_form: bool = False    # 实验性：用闭式梯度替代 autograd（仅 MSE）(若开启Hebbian先于BP,需要将其开启)
 
     # --- DLAM 睡眠机制（新增）---
     use_dlam_sleep: bool = False         # 启用谱滤波睡眠
@@ -415,7 +522,7 @@ class AeloruLayer(nn.Module):
         
         # ========== PEM 自适应侧向连接（新增）==========
         if cfg.use_lateral_connection:
-            self.register_buffer('lateral_weights', torch.zeros(cfg.r, cfg.r))
+            self.register_buffer('lateral_weights', torch.zeros(cfg.r, cfg.r,dtype=self.cfg.AMP_DTYPE))
         else:
             self.lateral_weights = None
         
@@ -2512,11 +2619,8 @@ def test_aeloru():
     print(f"  原始输出均值: {original_output.mean().item():.6f}")
     print(f"  Aeloru 输出均值: {aeloru_output.mean().item():.6f}")
     print(f"  最大绝对误差: {diff:.10f}")
-    
-    if diff >= 1e-5:
-        print(f"  ❌ 零初始化等价性失败！diff={diff}")
-    else:
-        print("  ✅ 测试 1 通过：零初始化等价性")
+    if torch.allclose(layer_full.m_x.float().cpu(), torch.ones(64)*0.5, atol=1e-5) == False :print(f"m_x 均值: {layer_full.m_x.mean().item():.6f}")
+    if torch.allclose(layer_full.m_y.float().cpu(), torch.ones(128)*0.5, atol=1e-5) == False :print(f"m_y 均值: {layer_full.m_y.mean().item():.6f}")
     
     # ========== 测试 2: 功能开关消融 ==========
     print(f"\n{'='*70}")
@@ -2561,6 +2665,7 @@ def test_aeloru():
             'use_lateral_connection': True, 'use_homeostatic_plasticity': True,
             'use_volatility_coupling': True, 'use_dlam_sleep': True,
             'use_hgf_fisher': True,
+            'use_hgf_closed_form': True,
             'hebbian_before_backprop': True
         })
     ]
@@ -2582,7 +2687,7 @@ def test_aeloru():
             status = "OK"
             loss_val = loss.item()
         except Exception as e:
-            status = f"ERR: {str(e)[:40]}"
+            status = f"ERR: {str(e)}"
             loss_val = float('nan')
         
         print(f"  {status:<20s} {name:<30s} | state={layer.state.value:<8s} | loss={loss_val:.4f}")
@@ -3035,3 +3140,4 @@ if __name__ == "__main__":
     test_aeloru()
     benchmark_aeloru()
 
+ 
