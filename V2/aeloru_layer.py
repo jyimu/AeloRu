@@ -959,7 +959,10 @@ class AeloruLayer(nn.Module):
         if self.cfg.use_hebbian and self._hebbian_pending_apply:
             # 计算影子增量的完整矩阵形式: B_heb @ A_heb
             # 注意：这里直接构造完整矩阵，因为 r 通常很小 (8/16)
-            hebbian_full = torch.mm(self._hebbian_delta_B, self._hebbian_delta_A)
+            hebbian_full = torch.mm(
+                self._hebbian_delta_B.detach().clone().to(delta_w.dtype),
+                self._hebbian_delta_A.detach().clone().to(delta_w.dtype)
+            )
             # 累加到总增量中
             delta_w = delta_w + hebbian_full
 
@@ -1019,8 +1022,9 @@ class AeloruLayer(nn.Module):
             # 【PEM sec3.2】自适应侧向抑制：在 r 维特征空间解耦
             if self.cfg.use_lateral_connection and self.lateral_weights is not None and self.training:
                 # h <- h - h @ L^T  （低秩特征间的竞争抑制）
-                self.lateral_weights = self.lateral_weights.to(h.dtype)
-                h = h - F.linear(h, self.lateral_weights)
+                # clone 避免 in-place：post_step_update 会修改 lateral_weights
+                lateral_w = self.lateral_weights.detach().clone().to(h.dtype)
+                h = h - F.linear(h, lateral_w)
             
             if self.cfg.use_hidora and self.m_x is not None and self.m_y is not None:
                 effective_B = self.lora_B * self.m_x.unsqueeze(1)
@@ -1035,12 +1039,14 @@ class AeloruLayer(nn.Module):
 
         # 关键：在最后加上 Hebbian 影子增量的前向传播
         if self.cfg.use_hebbian and self._hebbian_pending_apply:
-            # 直接计算影子增量的前向：x @ A_heb @ B_heb
-            delta_hebbian = F.linear(x, self._hebbian_delta_A)
-            delta_hebbian = F.linear(delta_hebbian, self._hebbian_delta_B)
-            delta_hebbian = delta_hebbian * (self.cfg.lora_alpha / self.cfg.r) # 保持缩放一致
+            # 计算影子增量的前向：x @ A_heb @ B_heb
+            # clone 避免 in-place：post_step_update 会修改这些 buffer
+            hebb_A = self._hebbian_delta_A.detach().clone().to(x.dtype)
+            hebb_B = self._hebbian_delta_B.detach().clone().to(x.dtype)
+            delta_hebbian = F.linear(x, hebb_A)
+            delta_hebbian = F.linear(delta_hebbian, hebb_B)
+            delta_hebbian = delta_hebbian * (self.cfg.lora_alpha / self.cfg.r)
 
-            # 应用 Fisher 掩码 (如果开启)
             if self.cfg.use_fisher and self.fisher_mask_inv is not None:
                 fisher_scale = self.fisher_mask_inv.mean(dim=1).unsqueeze(0)
                 if fisher_scale.dtype != delta_hebbian.dtype:
@@ -1198,14 +1204,16 @@ class AeloruLayer(nn.Module):
             # 由于此函数从 post_step_update 调用，x 可用，但签名没有 x
             # 改为基于输出的统计：用 B^T @ y_mean 近似 h_mean
             y_mean = y.mean(dim=0).float()  # (out_features,)
-            # 通过伪逆近似 r 维特征: h_mean ~ B^T @ y_mean（忽略非线性）
+            # 通过伪逆近似 r 维特征
             h_mean = torch.mm(self.lora_B.t().float(), y_mean.unsqueeze(1)).squeeze(1)  # (r,)
             
             # Hebbian 侧向更新
             dL = self.cfg.lateral_lr * torch.ger(h_mean, h_mean)  # (r, r)
-            self.lateral_weights.mul_(1.0 - self.cfg.lateral_decay).add_(dL).to(self.cfg.AMP_DTYPE)
-            # 禁止自连接（竞争而非自增强）
-            self.lateral_weights.fill_diagonal_(0)
+            
+            #非原地更新：避免破坏 autograd 计算图
+            new_lateral = self.lateral_weights * (1.0 - self.cfg.lateral_decay) + dL.to(self.lateral_weights.dtype)
+            new_lateral.fill_diagonal_(0)  # 禁止自连接
+            self.lateral_weights.copy_(new_lateral)
     
     # =================================================================
     # HGF 波动率耦合（sec3.1）
@@ -1407,50 +1415,59 @@ class AeloruLayer(nn.Module):
             return
 
         with torch.no_grad():
-            # --- 1. 全局遗忘衰减 (原地) ---
-            # 对影子增量本身也应用衰减，模拟突触稳固
+            # --- 1. 全局遗忘衰减（非原地）---
             decay_factor = self.cfg.hebbian_decay ** self._hebbian_acc_count
             if self._hebbian_pending_apply:
-                self._hebbian_delta_A.mul_(decay_factor)
-                self._hebbian_delta_B.mul_(decay_factor)
+                new_delta_A = self._hebbian_delta_A * decay_factor
+                new_delta_B = self._hebbian_delta_B * decay_factor
+            else:
+                new_delta_A = self._hebbian_delta_A.clone()
+                new_delta_B = self._hebbian_delta_B.clone()
 
-            # --- 2. 累加到影子缓冲区 ---
-            # 这里是关键：不再修改 self.lora_A/B，而是修改影子变量
-            self._hebbian_delta_B.add_(self._hebbian_acc_B)
-            self._hebbian_delta_A.add_(self._hebbian_acc_A)
+            # --- 2. 累加到影子缓冲区（非原地）---
+            new_delta_B = new_delta_B + self._hebbian_acc_B
+            new_delta_A = new_delta_A + self._hebbian_acc_A
 
-            # --- 3. 饱和限制 (原地) ---
-            self._hebbian_delta_A.clamp_(-self.cfg.saturation_limit, self.cfg.saturation_limit)
-            self._hebbian_delta_B.clamp_(-self.cfg.saturation_limit, self.cfg.saturation_limit)
+            # --- 3. 饱和限制（非原地）---
+            new_delta_A = new_delta_A.clamp(-self.cfg.saturation_limit, self.cfg.saturation_limit)
+            new_delta_B = new_delta_B.clamp(-self.cfg.saturation_limit, self.cfg.saturation_limit)
+            
+            self._hebbian_delta_A.copy_(new_delta_A)
+            self._hebbian_delta_B.copy_(new_delta_B)
 
-            # --- 4. Hebbian 反驱 Fisher (原有逻辑不变) ---
+            # --- 4. Hebbian 反驱 Fisher ---
             if self.cfg.use_fisher and self.fisher_mask is not None:
                 impact = torch.mm(self._hebbian_acc_B.abs(), self._hebbian_acc_A.abs())
                 if impact.max() > 1e-10:
                     impact.div_(impact.max() + 1e-10)
 
                 mask = self.fisher_topk_mask.to(self.fisher_mask.dtype) if self.fisher_topk_mask is not None else 1.0
-                self.fisher_mask.mul_(self.cfg.fisher_ema).add_(impact.to(self.fisher_mask.dtype) * mask, alpha=1.0 - self.cfg.fisher_ema)
+                
+                # ✅ 非原地更新 Fisher
+                new_fisher = self.fisher_mask * self.cfg.fisher_ema + impact.to(self.fisher_mask.dtype) * mask * (1.0 - self.cfg.fisher_ema)
+                self.fisher_mask.copy_(new_fisher)
                 self._fisher_dirty = True
 
                 if self.hebbian_trace is not None:
-                    self.hebbian_trace.add_(torch.mm(self._hebbian_acc_B.abs(), self._hebbian_acc_A.abs()))
+                    new_trace = self.hebbian_trace + torch.mm(self._hebbian_acc_B.abs(), self._hebbian_acc_A.abs())
+                    self.hebbian_trace.copy_(new_trace)
                     
-                # 【HGF sec2.3】若启用闭式 Fisher，用精度传播替代梯度估计
+                # 【HGF】若启用闭式 Fisher，用精度传播替代梯度估计
                 if self.cfg.use_hgf_fisher and self.running_var is not None:
                     # 精度 = 1 / 方差，作为 Fisher 对角线的闭式估计
-                    pi = 1.0 / (self.running_var.float().clamp(min=1e-5))  # (out_features,)
+                    pi = 1.0 / (self.running_var.float().clamp(min=1e-5))
                     # 广播到矩阵形式（简化版分层精度传播）
                     pi_matrix = pi.unsqueeze(1).expand(self.out_features, self.in_features)
+                    new_fisher = self.fisher_mask * 0.5 + pi_matrix.to(self.fisher_mask.dtype) * 0.5
                     # 混合：保留部分 EMA 历史，融入新精度
-                    self.fisher_mask.mul_(0.5).add_(pi_matrix.to(self.fisher_mask.dtype), alpha=0.5)
+                    self.fisher_mask.copy_(new_fisher)
                     self._fisher_dirty = True
 
-            # --- 5. 清理 ---
+            # --- 5. 清理累积器 ---
             self._hebbian_acc_B.zero_()
             self._hebbian_acc_A.zero_()
             self._hebbian_acc_count = 0
-            self._hebbian_pending_apply = True # 标记有新更新
+            self._hebbian_pending_apply = True
             self._cache_valid = False
 
     
