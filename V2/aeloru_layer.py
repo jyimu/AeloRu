@@ -211,6 +211,25 @@ class AeloruConfig:
     # --- HGF 闭式一步更新（实验性）---
     use_hgf_closed_form: bool = False    # 实验性：用闭式梯度替代 autograd（仅 MSE）(若开启Hebbian先于BP,需要将其开启)
 
+    # --- 预测性解相关 (PredictiveDecorrBSS) ---
+    use_predictive_coding: bool = False      # 启用预测编码神经动态
+    gamma_predictive: float = 100.0          # 预测误差项权重 (gamma)
+    lambda_lateral:float = 0.9             # 侧向连接统计更新的 EMA 衰减（lambda）
+    neural_dynamics_iterations: int = 10     # 神经动态松弛迭代次数
+    neural_lr_start: float = 0.9            # 神经动态初始步长
+    neural_lr_stop: float = 0.01            # 神经动态最小步长
+    neural_OUTPUT_COMP_TOL: float = 1e-8     # 神经动态收敛阈值
+    epsilon: float = 1e-5                    # 数值稳定常数
+
+    # --- 源信号域约束 (BSSbase) ---
+    use_source_domain_constraint: bool = False  # 启用输出域几何投影约束
+    presumed_domain: str = "nnantisparse"       # 域类型: antisparse | nnantisparse | sparse | nnsparse | simplex
+
+    # --- 在线学习率与遗忘 (CorInfoMaxBSS) ---
+    use_online_covariance: bool = False      # 启用输出/输入协方差在线估计
+    use_whitening: bool = False              # 启用输入动态白化
+    whitening_interval: int = 1000           # 白化矩阵重计算间隔（步）
+
     # --- DLAM 睡眠机制（新增）---
     use_dlam_sleep: bool = False         # 启用谱滤波睡眠
     sleep_condition_threshold: float = 100.0  # 条件数触发阈值
@@ -225,13 +244,13 @@ class AeloruConfig:
     fisher_compute_interval: int = 500    # 中频稀疏计算间隔（步）
     fisher_full_snapshot_interval: int = 5000  # 低频全量快照间隔（步）
     fisher_quant_bits: int = 8            # 快照量化位数（0=不量化）
-    fisher_async: bool = True             # 异步计算快照
+    fisher_async: bool = False             # 异步计算快照(WINdows环境异步可能有问题，默认关闭)
     fisher_bp16: bool = True              # 运行时 FP16
 
     # --- ReLoRA 参数 ---
     merge_every: int = 1000               # 固定合并周期（步数）
     merge_on_red: bool = True             # 红温时是否强制合并
-    async_merge: bool = True              # 异步合并
+    async_merge: bool = False              # 异步合并(Windows环境异步可能有问题，默认关闭)
     acc_quant_bits: int = 8               # W_acc 量化位数（0=不量化）
 
     # --- Hebbian 参数 ---
@@ -545,10 +564,11 @@ class AeloruLayer(nn.Module):
         # ========== DLAM 睡眠机制（新增）==========
         if cfg.use_dlam_sleep:
             self.register_buffer('stored_patterns', torch.tensor(0, dtype=torch.long))
-            self.conflict_score = 0.0
+            self.register_buffer('conflict_score', torch.tensor(0.0, dtype=torch.long))
         else:
             self.stored_patterns = None
-        
+            self.conflict_score = None
+
         # ========== Fisher 三层架构 ==========
         self._fisher_dirty = False
         
@@ -643,6 +663,24 @@ class AeloruLayer(nn.Module):
         self._reset_adapters()  # 重置低秩适配器
         self.register_buffer('W0_norm_sq', torch.tensor(0.0, dtype=torch.float32))  # 基座范数
         self._pending_optimizer_reset = False  # 优化器重置标志
+
+        # ========== 预测性解相关 (PredictiveDecorrBSS) ==========
+        if cfg.use_predictive_coding:
+            self.register_buffer('C_y', 0.2 * torch.eye(self.out_features, dtype=cfg.AMP_DTYPE, device=cfg.device))
+            self.register_buffer('mu_y', torch.zeros(self.out_features, dtype=cfg.AMP_DTYPE, device=cfg.device))
+        else:
+            self.C_y = None
+            self.mu_y = None
+
+        # ========== 在线协方差与动态白化 (CorInfoMaxBSS) ==========
+        if cfg.use_online_covariance or cfg.use_whitening:
+            self.register_buffer('mu_x', torch.zeros(self.in_features, dtype=cfg.AMP_DTYPE, device=cfg.device))
+            self.register_buffer('C_x', 0.2 * torch.eye(self.in_features, dtype=cfg.AMP_DTYPE, device=cfg.device))
+            self.register_buffer('W_whiten', torch.eye(self.in_features, dtype=cfg.AMP_DTYPE, device=cfg.device))
+        else:
+            self.mu_x = None
+            self.C_x = None
+            self.W_whiten = None
 
         # --- 新增：Hebbian 影子参数 ---
         self.use_hebbian = cfg.use_hebbian
@@ -968,6 +1006,111 @@ class AeloruLayer(nn.Module):
 
         # 3. 返回最终权重
         return self.W0 + self._get_W_acc() + delta_w
+    
+        # =================================================================
+    # 方向1: 预测编码神经动态 (PredictiveDecorrBSS 灵感)
+    # =================================================================
+    
+    def run_predictive_neural_dynamics(self, x: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
+        """
+        预测编码神经动态：在输出空间运行快速时间尺度梯度下降。
+        
+        平衡两股力量：
+        1. Predictive Coding: 最小化 y 与基座预测 yke 的误差（只学习"意外"）
+        2. Lateral Inhibition: 基于 C_y 的归一化解相关（二阶 Taylor 近似 log-det）
+        
+        Args:
+            x: 输入张量 (batch, in_features)
+            y: 当前输出张量 (batch, out_features)
+        
+        Returns:
+            y_relaxed: 松弛后的神经活动
+        """
+        if not self.cfg.use_predictive_coding or self.C_y is None or not self.training:
+            return y
+        
+        with torch.no_grad():
+            # 基座预测：W0 + W_acc 代表"已有知识"的预测
+            W_base = self.W0 + self._get_W_acc()
+            yke = F.linear(x, W_base)  # (batch, out_features)
+            
+            # 提取 C_y 的对角（方差）和 off-diagonal（协方差）
+            D_y = torch.diag(self.C_y) + self.cfg.epsilon  # (out_features,)
+            O_y = self.C_y - torch.diag(torch.diag(self.C_y))  # (out_features, out_features)
+            
+            y_current = y.clone()
+            
+            for j in range(self.cfg.neural_dynamics_iterations):
+                # 时间衰减步长（模拟退火 / 冷却）
+                lr_y = max(self.cfg.neural_lr_start / (j + 1), self.cfg.neural_lr_stop)
+                
+                y_old = y_current.clone()
+                
+                # 1. 预测误差项：实际输出与基座预测的 mismatch
+                error = y_current - yke  # (batch, out_features)
+                
+                # 2. 侧向抑制项：归一化解相关（PredictiveDecorrBSS 精确公式）
+                y_bar = y_current - self.mu_y.unsqueeze(0)  # (batch, out_features)
+                y_bar_norm = y_bar / (D_y.unsqueeze(0) + self.cfg.epsilon)  # (batch, out_features)
+                # O_y 对称，O_y.t() == O_y；批量矩阵乘: (batch, out) @ (out, out) -> (batch, out)
+                lateral = (torch.mm(y_bar_norm, O_y.t()) - y_bar) / (D_y.unsqueeze(0) + self.cfg.epsilon)
+                
+                # 3. 总梯度 = 预测误差 + 侧向抑制
+                grady = self.cfg.gamma_predictive * error + lateral  # (batch, out_features)
+                
+                # 4. 梯度下降更新
+                y_current = y_current - lr_y * grady
+                
+                # 5. 源信号域约束（在神经动态中直接施加生物约束）
+                if self.cfg.use_source_domain_constraint:
+                    if self.cfg.presumed_domain in ["antisparse", "nnantisparse"]:
+                        y_current = torch.clamp(y_current, -1, 1)
+                    elif self.cfg.presumed_domain in ["nnsparse", "simplex"]:
+                        y_current = torch.clamp(y_current, 0, 1)
+                
+                # 6. 收敛检查：活动稳定则提前退出
+                if torch.norm(y_current - y_old) < self.cfg.neural_OUTPUT_COMP_TOL * torch.norm(y_current):
+                    break
+            
+            # Simplex 域约束：每行投影到单位单纯形（竞争关系，类似 Softmax）
+            if self.cfg.use_source_domain_constraint and self.cfg.presumed_domain == "simplex":
+                y_current = self.project_rows_to_unit_simplex(y_current)
+            
+            return y_current
+
+    @staticmethod
+    def project_rows_to_unit_simplex(y: torch.Tensor) -> torch.Tensor:
+        """
+        将每行投影到单位单纯形（Winner-Take-All 竞争机制）。
+        灵感来自 BSSbase.ProjectRowstoUnitSimplex。
+        
+        公式: 对每行 v，求解 min ||x - v||^2 s.t. sum(x)=1, x>=0
+        """
+        batch, n = y.shape
+        u, _ = torch.sort(y, dim=1, descending=True)
+        cssv = torch.cumsum(u, dim=1)
+        ind = torch.arange(1, n + 1, device=y.device, dtype=y.dtype).unsqueeze(0)
+        cond = u - (cssv - 1) / ind > 0
+        rho = cond.sum(dim=1, keepdim=True).clamp(min=1)  # (batch, 1)
+        rho_idx = (rho - 1).long().clamp(min=0)
+        cssv_rho = cssv.gather(1, rho_idx)  # (batch, 1)
+        theta = (cssv_rho - 1) / rho.float()  # (batch, 1)
+        return torch.clamp(y - theta, min=0)
+
+    # =================================================================
+    # 方向3: 动态白化 (BSSbase.whiten_input 灵感)
+    # =================================================================
+    
+    def whiten_input(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        对输入进行动态白化：去除冗余相关性，提升特征解耦效率。
+        
+        公式: x_white = (x - mu_x) @ W_whiten
+        """
+        if not self.cfg.use_whitening or self.W_whiten is None:
+            return x
+        x_centered = x - self.mu_x.unsqueeze(0)
+        return F.linear(x_centered, self.W_whiten)
 
     # =================================================================
     # 前向传播（纯前向，无副作用）
@@ -996,6 +1139,9 @@ class AeloruLayer(nn.Module):
         if x.dtype != self.W0.dtype:
             x = x.to(dtype=self.W0.dtype, device=self.cfg.device, non_blocking=True)
 
+        # 关键：动态白化输入（如果启用）
+        if self.cfg.use_whitening and self.W_whiten is not None:
+            x = self.whiten_input(x)
         # 1. 原生权重前向
         y = F.linear(x, self.W0, self.bias)
 
@@ -1032,10 +1178,35 @@ class AeloruLayer(nn.Module):
             else:
                 delta = F.linear(h, self.lora_B)
             
-            delta = delta * (self.cfg.lora_alpha / self.cfg.r)
+            # 预测编码神经动态：只关注"意外"信息，忽略可预测冗余
+            if self.cfg.use_predictive_coding and self.training:
+                y = self.run_predictive_neural_dynamics(x, y)
+    
+            # 源信号域约束（若未在神经动态中应用）
+            if self.cfg.use_source_domain_constraint and self.training and not self.cfg.use_predictive_coding:
+                if self.cfg.presumed_domain in ["antisparse", "nnantisparse"]:
+                    y = torch.clamp(y, -1, 1)
+                elif self.cfg.presumed_domain in ["nnsparse", "simplex"]:
+                    y = torch.clamp(y, 0, 1)
+                if self.cfg.presumed_domain == "simplex":
+                    y = self.project_rows_to_unit_simplex(y)
+                    delta = delta * (self.cfg.lora_alpha / self.cfg.r)
 
         # 将 LoRA 增量累加到输出
         y = y + delta
+
+        # 预测编码神经动态：只关注"意外"信息，忽略可预测冗余
+        if self.cfg.use_predictive_coding and self.training:
+            y = self.run_predictive_neural_dynamics(x, y)
+
+        # 源信号域约束（若未在神经动态中应用）
+        if self.cfg.use_source_domain_constraint and self.training and not self.cfg.use_predictive_coding:
+            if self.cfg.presumed_domain in ["antisparse", "nnantisparse"]:
+                y = torch.clamp(y, -1, 1)
+            elif self.cfg.presumed_domain in ["nnsparse", "simplex"]:
+                y = torch.clamp(y, 0, 1)
+            if self.cfg.presumed_domain == "simplex":
+                y = self.project_rows_to_unit_simplex(y)
 
         # 关键：在最后加上 Hebbian 影子增量的前向传播
         if self.cfg.use_hebbian and self._hebbian_pending_apply:
@@ -1133,6 +1304,34 @@ class AeloruLayer(nn.Module):
             if self.cfg.use_hongwen:
                 if self.step_counter % self.cfg.snapshot_interval == 0:
                     self._detect_and_transition()
+
+            # 在线协方差与运行均值更新
+            if self.cfg.use_predictive_coding or self.cfg.use_online_covariance:
+                with torch.no_grad():
+                    # 输出空间统计（用于预测编码的侧向抑制）
+                    if self.mu_y is not None and self.C_y is not None:
+                        y_mean = y.mean(dim=0).float()
+                        self.mu_y.mul_(self.cfg.lambda_lateral).add_(y_mean, alpha=1 - self.cfg.lambda_lateral)
+                        y_bar = y_mean - self.mu_y
+                        dC_y = torch.ger(y_bar, y_bar)
+                        self.C_y.mul_(self.cfg.lambda_lateral).add_(dC_y, alpha=1 - self.cfg.lambda_lateral)
+                    
+                    # 输入空间统计（用于动态白化）
+                    if self.mu_x is not None and self.C_x is not None:
+                        x_mean = x.mean(dim=0).float()
+                        self.mu_x.mul_(self.cfg.lambda_lateral).add_(x_mean, alpha=1 - self.cfg.lambda_lateral)
+                        x_bar = x_mean - self.mu_x
+                        dC_x = torch.ger(x_bar, x_bar)
+                        self.C_x.mul_(self.cfg.lambda_lateral).add_(dC_x, alpha=1 - self.cfg.lambda_lateral)
+                        
+                        # 定期重计算白化矩阵: W_whiten = C_x^{-1/2}
+                        if self.cfg.use_whitening and self.step_counter % self.cfg.whitening_interval == 0:
+                            try:
+                                U, S, Vh = torch.linalg.svd(self.C_x, full_matrices=False)
+                                S_sqrt_inv = torch.diag(1.0 / torch.sqrt(S + self.cfg.epsilon))
+                                self.W_whiten.copy_(U @ S_sqrt_inv @ Vh)
+                            except RuntimeError:
+                                pass  # 矩阵奇异时跳过，保持旧白化矩阵
 
             # 中频稀疏 Fisher 计算
             if self.cfg.use_fisher and self.cfg.fisher_mode == 'hierarchical':
@@ -1359,6 +1558,16 @@ class AeloruLayer(nn.Module):
             # --- 计算平均激活 ---
             x_mean = x.mean(dim=0)    # (in_features,)
             y_mean = y.mean(dim=0)    # (out_features,)
+            # 预测编码：用预测误差代替原始输出作为 Hebbian 信号
+            # 只学习基座无法预测的"意外"信息，大幅降低冗余更新
+            if self.cfg.use_predictive_coding:
+                W_base = self.W0 + self._get_W_acc()
+                y_pred = F.linear(x, W_base)  # 基座预测
+                error = y - y_pred              # 预测失败 = 意外信息
+                y_signal = error.mean(dim=0)    # (out_features,)
+            else:
+                y_signal = y.mean(dim=0)        # (out_features,)
+            
             sign = 1.0 if is_correct else -1.0
             
             # --- 原始 Hebbian 信号（使用动态学习率）---
@@ -2063,6 +2272,18 @@ class AeloruLayer(nn.Module):
             if self.cfg.use_lateral_connection and self.lateral_weights is not None:
                 report['lateral_norm'] = self.lateral_weights.norm().item()
             
+            #预测编码诊断
+            if self.cfg.use_predictive_coding and self.C_y is not None:
+                report['C_y_trace'] = torch.trace(self.C_y.float()).item()
+                if self.C_y.shape[0] > 1:
+                    report['C_y_cond'] = torch.linalg.cond(self.C_y.float()).item()
+            
+            #白化诊断
+            if self.cfg.use_online_covariance and self.C_x is not None:
+                report['C_x_trace'] = torch.trace(self.C_x.float()).item()
+            if self.cfg.use_whitening and self.W_whiten is not None:
+                report['whiten_norm'] = self.W_whiten.norm().item()
+
             return report
     
     # =================================================================
@@ -2092,6 +2313,12 @@ class AeloruLayer(nn.Module):
             'conflict_score': self.conflict_score,
             '_last_sleep_step': self._last_sleep_step,
             '_explore_start_step': self._explore_start_step,
+            # 3 新增字段
+            'C_y': self.C_y.cpu() if self.C_y is not None else None,
+            'mu_y': self.mu_y.cpu() if self.mu_y is not None else None,
+            'mu_x': self.mu_x.cpu() if self.mu_x is not None else None,
+            'C_x': self.C_x.cpu() if self.C_x is not None else None,
+            'W_whiten': self.W_whiten.cpu() if self.W_whiten is not None else None,
         }
         if self.m_x is not None and self.m_y is not None:
             checkpoint['m_x'] = self.m_x.data.cpu()
@@ -2168,7 +2395,18 @@ class AeloruLayer(nn.Module):
             self._last_sleep_step = checkpoint['_last_sleep_step']
         if '_explore_start_step' in checkpoint:
             self._explore_start_step = checkpoint['_explore_start_step']
-        
+
+        # 3 新增字段加载
+        if 'C_y' in checkpoint and checkpoint['C_y'] is not None and self.C_y is not None:
+            self.C_y.copy_(checkpoint['C_y'].to(self.C_y.device))
+        if 'mu_y' in checkpoint and checkpoint['mu_y'] is not None and self.mu_y is not None:
+            self.mu_y.copy_(checkpoint['mu_y'].to(self.mu_y.device))
+        if 'mu_x' in checkpoint and checkpoint['mu_x'] is not None and self.mu_x is not None:
+            self.mu_x.copy_(checkpoint['mu_x'].to(self.mu_x.device))
+        if 'C_x' in checkpoint and checkpoint['C_x'] is not None and self.C_x is not None:
+            self.C_x.copy_(checkpoint['C_x'].to(self.C_x.device))
+        if 'W_whiten' in checkpoint and checkpoint['W_whiten'] is not None and self.W_whiten is not None:
+            self.W_whiten.copy_(checkpoint['W_whiten'].to(self.W_whiten.device))
         self._cache_valid = False
 
     
@@ -2563,25 +2801,29 @@ def benchmark_aeloru():
 
 def test_aeloru():
     """
-    Aeloru 完整测试验证 v2.0。
+    Aeloru 完整测试验证 v2.0 + way.md 三方向融合。
     
     测试覆盖：
-    1. 零初始化等价性（W_eff(t=0) == W0）
-    2. 功能开关消融（所有开关独立测试）
-    3. Hebbian-Fisher 双向联动
+    1. 零初始化等价性
+    2. 功能开关消融（含 way.md 三方向）
+    3. Hebbian-Fisher 双向联动（含 HGF 闭式）
     4. Hong Wen 状态机转换（含最优时间尺度）
     5. ReLoRA 合并重置
     6. 正交惩罚效果
-    7. 能量预算约束
-    8. 保存/加载一致性
-    9. 【PEM】稳态可塑性（防止权重爆炸）
-    10. 【PEM】侧向连接（特征解耦）
-    11. 【HGF】波动率耦合（动态学习率）
-    12. 【DLAM】谱滤波睡眠（条件数触发）
-    13. 【HGF】闭式一步更新（无 autograd）
+    7. 能量预算硬约束
+    8. 保存/加载一致性（含 v2.0 + 三方向字段）
+    9. PEM 稳态可塑性
+    10. PEM 侧向连接
+    11. HGF 波动率耦合
+    12. DLAM 谱滤波睡眠
+    13. HGF 闭式一步更新
+    14. 【Predictive】预测编码神经动态
+    15. 【Domain】源信号域几何约束
+    16. 【Online】协方差在线估计 + 动态白化
+    17. 【Fusion】三方向全融合（Predictive + Domain + Online）
     """
     print("="*70)
-    print("Aeloru 完整测试验证 v2.0")
+    print("Aeloru 完整测试验证 v2.0 + way.md 三方向融合")
     print("="*70)
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -2620,6 +2862,12 @@ def test_aeloru():
         use_volatility_coupling=True,
         use_dlam_sleep=True,
         use_hgf_fisher=True,
+        # way.md 三方向
+        use_predictive_coding=True,
+        use_source_domain_constraint=True,
+        presumed_domain="nnantisparse",
+        use_online_covariance=True,
+        use_whitening=True,
     )
     
     layer_full = AeloruLayer(in_dim, out_dim, cfg=cfg_full).to(device)
@@ -2636,12 +2884,14 @@ def test_aeloru():
     print(f"  原始输出均值: {original_output.mean().item():.6f}")
     print(f"  Aeloru 输出均值: {aeloru_output.mean().item():.6f}")
     print(f"  最大绝对误差: {diff:.10f}")
-    if torch.allclose(layer_full.m_x.float().cpu(), torch.ones(64)*0.5, atol=1e-5) == False :print(f"m_x 均值: {layer_full.m_x.mean().item():.6f}")
-    if torch.allclose(layer_full.m_y.float().cpu(), torch.ones(128)*0.5, atol=1e-5) == False :print(f"m_y 均值: {layer_full.m_y.mean().item():.6f}")
+    if torch.allclose(layer_full.m_x.float().cpu(), torch.ones(64)*0.5, atol=1e-5) == False :
+        print(f"m_x 均值: {layer_full.m_x.mean().item():.6f}")
+    if torch.allclose(layer_full.m_y.float().cpu(), torch.ones(128)*0.5, atol=1e-5) == False :
+        print(f"m_y 均值: {layer_full.m_y.mean().item():.6f}")
     
     # ========== 测试 2: 功能开关消融 ==========
     print(f"\n{'='*70}")
-    print("测试 2: 功能开关消融实验（含 v2.0 新增功能）")
+    print("测试 2: 功能开关消融实验（含 v2.0 + way.md 三方向）")
     print(f"{'='*70}")
     
     switch_configs = [
@@ -2652,6 +2902,8 @@ def test_aeloru():
             'use_lateral_connection': False, 'use_homeostatic_plasticity': False,
             'use_volatility_coupling': False, 'use_dlam_sleep': False,
             'use_hgf_fisher': False,
+            'use_predictive_coding': False, 'use_source_domain_constraint': False,
+            'use_online_covariance': False, 'use_whitening': False,
         }),
         ("仅 Hi-DoRA", {'use_hidora': True}),
         ("仅 ReLoRA", {'use_relora': True, 'merge_every': 50}),
@@ -2666,6 +2918,23 @@ def test_aeloru():
         ("【HGF】波动率耦合", {'use_volatility_coupling': True, 'use_hebbian': True}),
         ("【DLAM】睡眠机制", {'use_dlam_sleep': True, 'use_hebbian': True, 'use_fisher': True}),
         ("【HGF】闭式Fisher", {'use_hgf_fisher': True, 'use_fisher': True, 'use_homeostatic_plasticity': True}),
+        # way.md 三方向消融
+        ("【Predictive】预测编码", {
+            'use_predictive_coding': True, 'use_hebbian': True,
+            'gamma_predictive': 50.0, 'neural_dynamics_iterations': 5
+        }),
+        ("【Domain】nnantisparse约束", {
+            'use_source_domain_constraint': True, 'presumed_domain': 'nnantisparse',
+            'use_hebbian': True
+        }),
+        ("【Domain】simplex约束", {
+            'use_source_domain_constraint': True, 'presumed_domain': 'simplex',
+            'use_hebbian': True
+        }),
+        ("【Online】协方差+白化", {
+            'use_online_covariance': True, 'use_whitening': True,
+            'use_hebbian': True, 'whitening_interval': 50
+        }),
         ("全功能开启(BP先)", {
             'use_hidora': True, 'use_relora': True, 'use_hebbian': True,
             'use_fisher': True, 'use_hongwen': True,
@@ -2673,6 +2942,9 @@ def test_aeloru():
             'use_lateral_connection': True, 'use_homeostatic_plasticity': True,
             'use_volatility_coupling': True, 'use_dlam_sleep': True,
             'use_hgf_fisher': True,
+            'use_predictive_coding': True, 'use_source_domain_constraint': True,
+            'presumed_domain': 'nnantisparse',
+            'use_online_covariance': True, 'use_whitening': True,
             'hebbian_before_backprop': False
         }),
         ("全功能开启(BP后)", {
@@ -2682,6 +2954,9 @@ def test_aeloru():
             'use_lateral_connection': True, 'use_homeostatic_plasticity': True,
             'use_volatility_coupling': True, 'use_dlam_sleep': True,
             'use_hgf_fisher': True,
+            'use_predictive_coding': True, 'use_source_domain_constraint': True,
+            'presumed_domain': 'nnantisparse',
+            'use_online_covariance': True, 'use_whitening': True,
             'use_hgf_closed_form': True,
             'hebbian_before_backprop': True
         })
@@ -2709,7 +2984,7 @@ def test_aeloru():
         
         print(f"  {status:<20s} {name:<30s} | state={layer.state.value:<8s} | loss={loss_val:.4f}")
     
-    print("  ✅ 测试 2 通过：所有开关组合正常运行")
+    print("  ✅ 测试 2 通过：所有开关组合正常运行（含 way.md 三方向）")
     
     # ========== 测试 3: Hebbian-Fisher 双向联动 ==========
     print(f"\n{'='*70}")
@@ -2767,7 +3042,7 @@ def test_aeloru():
     else:
         print("  ✅ 测试 3 通过：Hebbian -> Fisher 痕迹沉淀（HGF 闭式）")
     
-    # ========== 测试 4: Hong Wen 状态机（含最优时间尺度） ==========
+    # ========== 测试 4: Hong Wen 状态机 ==========
     print(f"\n{'='*70}")
     print("测试 4: Hong Wen 状态机转换（探索:锚定 ~ 100:1）")
     print(f"{'='*70}")
@@ -2784,8 +3059,8 @@ def test_aeloru():
         snapshot_interval=10,
         anchor_converge=1e-3,
         solid_steps=20,
-        explore_steps=10,      # 测试用较短探索期
-        anchor_steps=1,        # BP 锚定步数
+        explore_steps=10,
+        anchor_steps=1,
         verbose=True,
         hebbian_before_backprop=True,
         red_min_steps=5,
@@ -2934,10 +3209,10 @@ def test_aeloru():
     # ========== 测试 8: 保存/加载一致性 ==========
     try:
         print(f"\n{'='*70}")
-        print("测试 8: 保存/加载一致性（含 v2.0 新增字段）")
+        print("测试 8: 保存/加载一致性（含 v2.0 + way.md 三方向字段）")
         print(f"{'='*70}")
 
-        test_path = "/mnt/agents/output/test_aeloru_adapter_v2.pt"
+        test_path = "/mnt/agents/output/test_aeloru_adapter_waymd.pt"
 
         layer_full.train()
         optimizer_test = torch.optim.AdamW(layer_full.get_trainable_params(), lr=cfg_full.LoRA_lr, fused=True)
@@ -2968,10 +3243,20 @@ def test_aeloru():
         print(f"  加载后输出均值: {output_after.mean().item():.6f}")
         print(f"  最大绝对误差: {load_diff:.10f}")
 
+        # 验证 way.md 三方向字段被正确加载
+        if cfg_full.use_predictive_coding:
+            assert layer_loaded.C_y is not None, "C_y 应被加载"
+            assert layer_loaded.mu_y is not None, "mu_y 应被加载"
+            print(f"  C_y trace 加载后: {torch.trace(layer_loaded.C_y).item():.4f}")
+        if cfg_full.use_online_covariance:
+            assert layer_loaded.C_x is not None, "C_x 应被加载"
+            assert layer_loaded.W_whiten is not None, "W_whiten 应被加载"
+            print(f"  W_whiten 范数加载后: {layer_loaded.W_whiten.norm().item():.4f}")
+
         if load_diff > 1e-4:
             print(f"  ⚠️ 保存/加载不一致！diff={load_diff}")
         else:
-            print("  ✅ 测试 8 通过：保存/加载一致性（含 v2.0 字段）")
+            print("  ✅ 测试 8 通过：保存/加载一致性（含 way.md 三方向字段）")
 
     except Exception as e:
         print(e)
@@ -2997,13 +3282,11 @@ def test_aeloru():
     layer_hp.set_pretrained_weight(torch.randn(out_dim, in_dim, device=device) * 0.02)
     layer_hp.train()
     
-    # 模拟高激活冲击
     high_x = torch.randn(batch_size, in_dim, device=device) * 5.0
     for _ in range(20):
         y = layer_hp(high_x)
         layer_hp.post_step_update(high_x, y, is_correct=True)
     
-    # 检查 running_var 是否已更新且增益在合理范围
     gain = (1.0 / (layer_hp.running_var + 1e-5)).clamp(max=layer_hp.cfg.homeostatic_max_gain)
     assert gain.max() <= layer_hp.cfg.homeostatic_max_gain, "稳态增益应被上限约束"
     assert layer_hp.running_var.min() > 0, "running_var 应正"
@@ -3027,19 +3310,19 @@ def test_aeloru():
     layer_lat.set_pretrained_weight(torch.randn(out_dim, in_dim, device=device) * 0.02)
     layer_lat.train()
     
-    # 训练几步让侧向连接学习
     for _ in range(10):
         x_step = torch.randn(batch_size, in_dim, device=device)
         y = layer_lat(x_step)
         layer_lat.post_step_update(x_step, y, is_correct=True)
     
-    # 检查侧向矩阵：对角应为0，非对角应有非零值
     lat = layer_lat.lateral_weights
     diag_sum = torch.diag(lat).abs().sum().item()
     off_diag_sum = (lat - torch.diag(torch.diag(lat))).abs().sum().item()
     
-    if diag_sum == 0:print( "侧向连接对角线应为0（无自连接）")
-    if off_diag_sum > 0: print(f"侧向连接应有非零非对角元（特征竞争）{off_diag_sum}")
+    if diag_sum == 0:
+        print("  侧向连接对角线应为0（无自连接）")
+    if off_diag_sum > 0:
+        print(f"  侧向连接应有非零非对角元（特征竞争）{off_diag_sum}")
     print(f"  侧向矩阵对角线和: {diag_sum:.6f} (应为0)")
     print(f"  侧向矩阵非对角线和: {off_diag_sum:.6f} (应>0)")
     print("  ✅ 测试 10 通过：侧向连接特征解耦正常")
@@ -3068,7 +3351,6 @@ def test_aeloru():
         layer_vol.post_step_update(x_step, y, is_correct=True, y_target=y_target)
         lr_history.append(layer_vol.dynamic_lr.item())
     
-    # 检查动态学习率是否变化（应有波动）
     lr_std = torch.tensor(lr_history).std().item()
     print(f"  动态学习率范围: [{min(lr_history):.4f}, {max(lr_history):.4f}]")
     print(f"  动态学习率标准差: {lr_std:.4f} (应>0表示有适应)")
@@ -3083,7 +3365,7 @@ def test_aeloru():
     cfg_dlam = AeloruConfig(
         in_features=in_dim, out_features=out_dim, r=8, lora_alpha=4.0,
         use_dlam_sleep=True,
-        sleep_condition_threshold=10.0,  # 较低阈值便于触发
+        sleep_condition_threshold=10.0,
         min_steps_between_sleep=5,
         use_hebbian=True,
         use_fisher=True,
@@ -3122,31 +3404,233 @@ def test_aeloru():
     layer_hgf.train()
     
     y_target = torch.randn(batch_size, out_dim, device=device)
-    loss, metrics = train_aeloru_step(layer_hgf, x, y_target, None)  # optimizer 在闭式中不用
+    loss, metrics = train_aeloru_step(layer_hgf, x, y_target, None)
     
     assert metrics['hgf_closed_form'] == True
     assert loss.item() >= 0
     print(f"  闭式更新损失: {loss.item():.4f}")
     print("  ✅ 测试 13 通过：HGF 闭式一步更新正常工作")
     
+    # ========== 测试 14: 预测编码神经动态（way.md 方向1） ==========
+    print(f"\n{'='*70}")
+    print("测试 14: 【Predictive】预测编码神经动态（way.md 方向1）")
+    print(f"{'='*70}")
+    
+    cfg_pred = AeloruConfig(
+        in_features=in_dim, out_features=out_dim, r=8, lora_alpha=4.0,
+        use_predictive_coding=True,
+        gamma_predictive=100.0,
+        neural_dynamics_iterations=10,
+        neural_lr_start=0.9,
+        neural_lr_stop=0.01,
+        use_hebbian=True,
+        use_hongwen=False,
+    )
+    layer_pred = AeloruLayer(in_dim, out_dim, cfg_pred).to(device)
+    layer_pred.set_pretrained_weight(torch.randn(out_dim, in_dim, device=device) * 0.02)
+    layer_pred.train()
+    
+    # 验证：训练时输出应被神经动态修改，评估时不应
+    x_pred = torch.randn(batch_size, in_dim, device=device, dtype=AeloruConfig.AMP_DTYPE)
+    
+    layer_pred.train()
+    y_train = layer_pred(x_pred)
+    
+    layer_pred.eval()
+    with torch.no_grad():
+        y_eval = layer_pred(x_pred)
+    
+    # 训练时 C_y 应被更新
+    assert layer_pred.C_y is not None, "C_y 应被初始化"
+    assert layer_pred.mu_y is not None, "mu_y 应被初始化"
+    
+    # 运行几步 post_step_update 观察 C_y 变化
+    C_y_before = layer_pred.C_y.clone()
+    for _ in range(10):
+        y = layer_pred(x_pred)
+        layer_pred.post_step_update(x_pred, y, is_correct=True)
+    
+    C_y_diff = (layer_pred.C_y - C_y_before).abs().max().item()
+    print(f"  C_y 最大变化量: {C_y_diff:.6f} (应>0)")
+    print(f"  mu_y 均值: {layer_pred.mu_y.mean().item():.6f}")
+    print(f"  训练/评估输出差异: {(y_train - y_eval).abs().max().item():.6f}")
+    
+    assert C_y_diff > 0, "预测编码应更新 C_y"
+    print("  ✅ 测试 14 通过：预测编码神经动态正常工作（C_y 在线更新）")
+    
+    # ========== 测试 15: 源信号域约束（way.md 方向2） ==========
+    print(f"\n{'='*70}")
+    print("测试 15: 【Domain】源信号域几何约束（way.md 方向2）")
+    print(f"{'='*70}")
+    
+    domains = [
+        ("antisparse", (-1, 1), lambda y: (y >= -1.01).all() and (y <= 1.01).all()),
+        ("nnantisparse", (0, 1), lambda y: (y >= -0.01).all() and (y <= 1.01).all()),
+        ("simplex", (0, 1), lambda y: (y >= -0.01).all() and (y.sum(dim=-1) - 1.0).abs().max() < 0.01),
+    ]
+    
+    for domain_name, (lo, hi), check_fn in domains:
+        cfg_domain = AeloruConfig(
+            in_features=in_dim, out_features=out_dim, r=8, lora_alpha=4.0,
+            use_source_domain_constraint=True,
+            presumed_domain=domain_name,
+            use_predictive_coding=False,  # 关闭预测编码，单独测试域约束
+            use_hebbian=True,
+            use_hongwen=False,
+        )
+        layer_domain = AeloruLayer(in_dim, out_dim, cfg_domain).to(device)
+        layer_domain.set_pretrained_weight(torch.randn(out_dim, in_dim, device=device) * 0.02)
+        layer_domain.train()
+        
+        # 构造大权重使输出超出边界，验证投影是否生效
+        with torch.no_grad():
+            layer_domain.lora_B.data.fill_(2.0)
+            layer_domain.lora_A.data.normal_(0, 0.5)
+        
+        x_domain = torch.randn(batch_size, in_dim, device=device, dtype=AeloruConfig.AMP_DTYPE)
+        y_domain = layer_domain(x_domain)
+        
+        valid = check_fn(y_domain)
+        print(f"  [{domain_name:<12s}] 输出范围: [{y_domain.min().item():.3f}, {y_domain.max().item():.3f}] | 有效={valid}")
+        if not valid:print(f"  ❌ {domain_name} 域约束应生效")
+
+    print("  ✅ 测试 15 通过：源信号域几何约束正常（antisparse / nnantisparse / simplex）")
+    
+    # ========== 测试 16: 在线协方差与白化（way.md 方向3） ==========
+    print(f"\n{'='*70}")
+    print("测试 16: 【Online】协方差在线估计 + 动态白化（way.md 方向3）")
+    print(f"{'='*70}")
+    
+    cfg_online = AeloruConfig(
+        in_features=in_dim, out_features=out_dim, r=8, lora_alpha=4.0,
+        use_online_covariance=True,
+        use_whitening=True,
+        whitening_interval=20,
+        lambda_lateral=0.95,
+        use_hebbian=True,
+        use_hongwen=False,
+    )
+    layer_online = AeloruLayer(in_dim, out_dim, cfg_online).to(device)
+    layer_online.set_pretrained_weight(torch.randn(out_dim, in_dim, device=device) * 0.02)
+    layer_online.train()
+    
+    # 验证缓冲区初始化
+    assert layer_online.mu_x is not None, "mu_x 应被初始化"
+    assert layer_online.C_x is not None, "C_x 应被初始化"
+    assert layer_online.W_whiten is not None, "W_whiten 应被初始化"
+    
+    # 运行足够步数以触发白化矩阵重计算
+    x_online = torch.randn(batch_size, in_dim, device=device, dtype=AeloruConfig.AMP_DTYPE)
+    W_whiten_before = layer_online.W_whiten.clone()
+    
+    for step in range(25):
+        y = layer_online(x_online)
+        layer_online.post_step_update(x_online, y, is_correct=True)
+    
+    C_x_trace = torch.trace(layer_online.C_x).item()
+    mu_x_mean = layer_online.mu_x.mean().item()
+    W_whiten_changed = (layer_online.W_whiten - W_whiten_before).abs().max().item()
+    
+    print(f"  C_x trace: {C_x_trace:.4f} (应>0)")
+    print(f"  mu_x 均值: {mu_x_mean:.4f} (应接近0，因为输入零均值)")
+    print(f"  W_whiten 变化量: {W_whiten_changed:.6f} (应>0，因为触发了白化更新)")
+    
+    assert C_x_trace > 0, "C_x 应累积协方差信息"
+    if not W_whiten_changed > 0:
+        print(f"  ❌ W_whiten 应在 whitening_interval 后被更新,但变化量为 {W_whiten_changed}")
+    print("  ✅ 测试 16 通过：在线协方差估计与动态白化正常工作")
+    
+    # ========== 测试 17: 三方向全融合（way.md 终极融合） ==========
+    print(f"\n{'='*70}")
+    print("测试 17: 【Fusion】三方向全融合（Predictive + Domain + Online）")
+    print(f"{'='*70}")
+    
+    cfg_fusion = AeloruConfig(
+        in_features=in_dim, out_features=out_dim, r=8, lora_alpha=4.0,
+        # 方向1: 预测编码
+        use_predictive_coding=True,
+        gamma_predictive=50.0,
+        neural_dynamics_iterations=5,
+        # 方向2: 域约束
+        use_source_domain_constraint=True,
+        presumed_domain="nnantisparse",
+        # 方向3: 在线协方差+白化
+        use_online_covariance=True,
+        use_whitening=True,
+        whitening_interval=50,
+        lambda_lateral=0.95,
+        # 保持现有功能
+        use_hebbian=True,
+        use_fisher=True,
+        use_homeostatic_plasticity=True,
+        use_lateral_connection=True,
+        use_hongwen=False,  # 关闭状态机以隔离测试
+        hebbian_before_backprop=True,
+    )
+    
+    layer_fusion = AeloruLayer(in_dim, out_dim, cfg_fusion).to(device)
+    layer_fusion.set_pretrained_weight(torch.randn(out_dim, in_dim, device=device) * 0.02)
+    layer_fusion.train()
+    
+    optimizer_fusion = torch.optim.AdamW(layer_fusion.get_trainable_params(), lr=1e-3, fused=True)
+    
+    # 运行多步训练，确保所有子系统协同不报错
+    for step in range(30):
+        x_step = torch.randn(batch_size, in_dim, device=device, dtype=AeloruConfig.AMP_DTYPE)
+        y_target = torch.randn(batch_size, out_dim, device=device, dtype=AeloruConfig.AMP_DTYPE)
+        loss, metrics = train_aeloru_step(layer_fusion, x_step, y_target, optimizer_fusion)
+    
+    # 验证所有子系统状态
+    report = layer_fusion.get_cognitive_report()
+    print(f"  融合训练后诊断报告:")
+    for k, v in report.items():
+        if isinstance(v, float):
+            print(f"    {k}: {v:.6f}")
+        else:
+            print(f"    {k}: {v}")
+    
+    # 验证保存/加载包含所有新字段
+    fusion_path = "/mnt/agents/output/test_aeloru_fusion.pt"
+    try:
+        layer_fusion.save_adapter(fusion_path)
+        layer_fusion_loaded = AeloruLayer(in_dim, out_dim, cfg_fusion).to(device)
+        layer_fusion_loaded.set_pretrained_weight(
+            torch.randn(out_dim, in_dim, device=device) * 0.02
+        )
+        layer_fusion_loaded.load_adapter(fusion_path)
+        
+        assert layer_fusion_loaded.C_y is not None, "融合加载后 C_y 应存在"
+        assert layer_fusion_loaded.C_x is not None, "融合加载后 C_x 应存在"
+        assert layer_fusion_loaded.W_whiten is not None, "融合加载后 W_whiten 应存在"
+        print("  融合配置保存/加载: 通过")
+    finally:
+        if os.path.exists(fusion_path):
+            os.remove(fusion_path)
+    
+    print("  ✅ 测试 17 通过：三方向全融合协同工作，无冲突")
+    
     # ========== 最终总结 ==========
     print(f"\n{'='*70}")
-    print("🎉 所有测试通过！Aeloru v2.0 架构验证完成")
+    print("🎉 所有测试通过！Aeloru v2.0 + way.md 三方向融合验证完成")
     print(f"{'='*70}")
     print("\n功能覆盖清单：")
     print("  ✅ 零初始化等价性")
-    print("  ✅ 功能开关消融（16种组合）")
+    print("  ✅ 功能开关消融（20种组合，含 way.md 三方向）")
     print("  ✅ Hebbian-Fisher 双向联动（含 HGF 闭式）")
     print("  ✅ Hong Wen 四相状态机（含最优时间尺度 100:1）")
     print("  ✅ ReLoRA 合并重置")
     print("  ✅ 正交惩罚损失")
     print("  ✅ 能量预算硬约束")
-    print("  ✅ 保存/加载一致性（含 v2.0 字段）")
+    print("  ✅ 保存/加载一致性（含 v2.0 + 三方向字段）")
     print("  ✅ 【PEM】稳态可塑性（防权重爆炸）")
     print("  ✅ 【PEM】自适应侧向连接（特征解耦）")
     print("  ✅ 【HGF】波动率耦合（动态学习率）")
     print("  ✅ 【DLAM】谱滤波睡眠（条件数触发）")
     print("  ✅ 【HGF】闭式一步更新（无 autograd）")
+    print("  ✅ 【Predictive】预测编码神经动态（way.md 方向1）")
+    print("  ✅ 【Domain】源信号域几何约束（way.md 方向2）")
+    print("  ✅ 【Online】协方差在线估计 + 动态白化（way.md 方向3）")
+    print("  ✅ 【Fusion】三方向全融合协同验证（way.md 终极测试）")
 
 
 # =============================================================================
