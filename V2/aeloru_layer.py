@@ -3388,7 +3388,6 @@ def test_aeloru():
     if not sleep_triggered:
         print("  ℹ️  睡眠未在50步内触发（可能条件数不够高，属于正常）")
     print("  ✅ 测试 12 通过：DLAM 睡眠机制就绪")
-    
     # ========== 测试 13: HGF 闭式一步更新 ==========
     print(f"\n{'='*70}")
     print("测试 13: HGF 闭式一步更新（实验性，无 autograd）")
@@ -3404,11 +3403,17 @@ def test_aeloru():
     layer_hgf.train()
     
     y_target = torch.randn(batch_size, out_dim, device=device)
-    loss, metrics = train_aeloru_step(layer_hgf, x, y_target, None)
-    
-    assert metrics['hgf_closed_form'] == True
-    assert loss.item() >= 0
-    print(f"  闭式更新损失: {loss.item():.4f}")
+    try:
+        loss, metrics = train_aeloru_step(layer_hgf, x, y_target, None)
+        assert metrics['hgf_closed_form'] == True, "hgf_closed_form 标志应为 True"
+        assert loss.item() >= 0, "损失值应为非负"
+        print(f"  闭式更新损失: {loss.item():.4f}")
+        print("  ✅ 测试 13 通过：HGF 闭式一步更新正常工作")
+    except Exception as e:
+        print(f"  ❌ 测试 13 失败：HGF 闭式一步更新异常: {e}")
+        import traceback
+        traceback.print_exc()
+        assert False, f"HGF 闭式一步更新测试失败: {e}"
     print("  ✅ 测试 13 通过：HGF 闭式一步更新正常工作")
     
     # ========== 测试 14: 预测编码神经动态（way.md 方向1） ==========
@@ -3438,19 +3443,24 @@ def test_aeloru():
     
     layer_pred.eval()
     with torch.no_grad():
-        y_eval = layer_pred(x_pred)
-    
-    # 训练时 C_y 应被更新
-    assert layer_pred.C_y is not None, "C_y 应被初始化"
-    assert layer_pred.mu_y is not None, "mu_y 应被初始化"
-    
-    # 运行几步 post_step_update 观察 C_y 变化
-    C_y_before = layer_pred.C_y.clone()
-    for _ in range(10):
-        y = layer_pred(x_pred)
-        layer_pred.post_step_update(x_pred, y, is_correct=True)
-    
+        # 运行几步 post_step_update 观察 C_y、mu_y 变化
+        C_y_before = layer_pred.C_y.clone()
+        mu_y_before = layer_pred.mu_y.clone()
+        for _ in range(10):
+            y = layer_pred(x_pred)
+            layer_pred.post_step_update(x_pred, y, is_correct=True)
+            
+    y_eval = layer_pred(x_pred)
     C_y_diff = (layer_pred.C_y - C_y_before).abs().max().item()
+    mu_y_diff = (layer_pred.mu_y - mu_y_before).abs().max().item()
+    print(f"  C_y 最大变化量: {C_y_diff:.6f} (应>0)")
+    print(f"  mu_y 最大变化量: {mu_y_diff:.6f} (应>0)")
+    print(f"  mu_y 均值: {layer_pred.mu_y.mean().item():.6f}")
+    print(f"  训练/评估输出差异: {(y_train - y_eval).abs().max().item():.6f}")
+    
+    assert C_y_diff > 0, "预测编码应更新 C_y"
+    assert mu_y_diff > 0, "预测编码应更新 mu_y"
+    print("  ✅ 测试 14 通过：预测编码神经动态正常工作（C_y、mu_y 在线更新）")
     print(f"  C_y 最大变化量: {C_y_diff:.6f} (应>0)")
     print(f"  mu_y 均值: {layer_pred.mu_y.mean().item():.6f}")
     print(f"  训练/评估输出差异: {(y_train - y_eval).abs().max().item():.6f}")
