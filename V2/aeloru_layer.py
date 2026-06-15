@@ -164,6 +164,7 @@ class AeloruConfig:
 
         # --- Hong Wen 红温参数（时间尺度优化：探索:锚定 ≈ 100:1）---
         red_threshold: float = 0.65           # 冲突分数触发线
+        hgf_conflict_strength: float = 5.0    # HGF 冲突强度系数
         snapshot_interval: int = 50           # Fisher 快照间隔（步数）
         anchor_converge: float = 1e-4         # 锚定期梯度收敛阈值
         solid_steps: int = 200                # 固化期持续步数（Hebbian 固化）
@@ -294,6 +295,7 @@ class AeloruConfig:
 
     # --- Hong Wen 红温参数（时间尺度优化：探索:锚定 ≈ 100:1）---
     red_threshold: float = 0.65           # 冲突分数触发线
+    hgf_conflict_strength: float = 5.0    # HGF 冲突强度系数
     snapshot_interval: int = 50           # Fisher 快照间隔（步数）
     anchor_converge: float = 1e-4         # 锚定期梯度收敛阈值
     solid_steps: int = 200                # 固化期持续步数（Hebbian 固化）
@@ -2115,7 +2117,7 @@ class AeloruLayer(nn.Module):
             return 0.0
         std = buf.std(unbiased=False)
         # 【增强】乘以系数放大冲突信号，使其更容易触发阈值
-        conflict = (std / mean).item() * 5.0  # 放大 5 倍，确保能触发 red_threshold=0.1
+        conflict = (std / mean).item() * self.cfg.hgf_conflict_strength  # 放大 5 倍，确保能触发 red_threshold=0.1
         return conflict
 
     def _compute_grad_conflict(self) -> float:
