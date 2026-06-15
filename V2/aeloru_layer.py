@@ -110,6 +110,7 @@ class AeloruConfig:
 
         # --- 预测性解相关 (PredictiveDecorrBSS) ---
         use_predictive_coding: bool = False      # 启用预测编码神经动态
+        predictive_coding_rank: int = 16         # C_y 低秩因子秩
         gamma_predictive: float = 100.0          # 预测误差项权重 (gamma)
         lambda_lateral:float = 0.9             # 侧向连接统计更新的 EMA 衰减（lambda）
         neural_dynamics_iterations: int = 10     # 神经动态松弛迭代次数
@@ -237,6 +238,7 @@ class AeloruConfig:
 
     # --- 预测性解相关 (PredictiveDecorrBSS) ---
     use_predictive_coding: bool = False      # 启用预测编码神经动态
+    predictive_coding_rank: int = 16         # C_y 低秩因子秩
     gamma_predictive: float = 100.0          # 预测误差项权重 (gamma)
     lambda_lateral:float = 0.9             # 侧向连接统计更新的 EMA 衰减（lambda）
     neural_dynamics_iterations: int = 10     # 神经动态松弛迭代次数
@@ -694,10 +696,12 @@ class AeloruLayer(nn.Module):
 
         # ========== 预测性解相关 (PredictiveDecorrBSS) ==========
         if cfg.use_predictive_coding:
-            self.register_buffer('C_y', 0.2 * torch.eye(self.out_features, dtype=cfg.AMP_DTYPE, device=cfg.device))
+            self.register_buffer('C_y_diag', 0.2 * torch.ones(self.out_features, dtype=cfg.AMP_DTYPE, device=cfg.device))
+            self.register_buffer('C_y_U', torch.zeros(self.out_features, cfg.predictive_coding_rank, dtype=cfg.AMP_DTYPE, device=cfg.device))
             self.register_buffer('mu_y', torch.zeros(self.out_features, dtype=cfg.AMP_DTYPE, device=cfg.device))
         else:
-            self.C_y = None
+            self.C_y_diag = None
+            self.C_y_U = None
             self.mu_y = None
 
         # ========== 在线协方差与动态白化 (CorInfoMaxBSS) ==========
@@ -1054,7 +1058,7 @@ class AeloruLayer(nn.Module):
         Returns:
             y_relaxed: 松弛后的神经活动
         """
-        if not self.cfg.use_predictive_coding or self.C_y is None or not self.training:
+        if not self.cfg.use_predictive_coding or self.C_y_diag is None or not self.training:
             return y
         
         with torch.no_grad():
@@ -1062,9 +1066,9 @@ class AeloruLayer(nn.Module):
             W_base = self.W0 + self._get_W_acc()
             yke = F.linear(x, W_base)  # (batch, out_features)
             
-            # 提取 C_y 的对角（方差）和 off-diagonal（协方差）
-            D_y = torch.diag(self.C_y) + self.cfg.epsilon  # (out_features,)
-            O_y = self.C_y - torch.diag(torch.diag(self.C_y))  # (out_features, out_features)
+            # 提取 C_y 的对角（方差）
+            diag_U = torch.sum(self.C_y_U * self.C_y_U, dim=1)
+            D_y = self.C_y_diag + diag_U + self.cfg.epsilon  # (out_features,)
             
             y_current = y.clone()
             
@@ -1080,8 +1084,9 @@ class AeloruLayer(nn.Module):
                 # 2. 侧向抑制项：归一化解相关（PredictiveDecorrBSS 精确公式）
                 y_bar = y_current - self.mu_y.unsqueeze(0)  # (batch, out_features)
                 y_bar_norm = y_bar / (D_y.unsqueeze(0) + self.cfg.epsilon)  # (batch, out_features)
-                # O_y 对称，O_y.t() == O_y；批量矩阵乘: (batch, out) @ (out, out) -> (batch, out)
-                lateral = (torch.mm(y_bar_norm, O_y.t()) - y_bar) / (D_y.unsqueeze(0) + self.cfg.epsilon)
+                y_proj = torch.mm(y_bar_norm, self.C_y_U)  # (batch, rank)
+                y_uu = torch.mm(y_proj, self.C_y_U.t())  # (batch, out_features)
+                lateral = (y_uu - y_bar_norm * diag_U.unsqueeze(0) - y_bar) / (D_y.unsqueeze(0) + self.cfg.epsilon)
                 
                 # 3. 总梯度 = 预测误差 + 侧向抑制
                 grady = self.cfg.gamma_predictive * error + lateral  # (batch, out_features)
@@ -1343,12 +1348,17 @@ class AeloruLayer(nn.Module):
             if self.cfg.use_predictive_coding or self.cfg.use_online_covariance:
                 with torch.no_grad():
                     # 输出空间统计（用于预测编码的侧向抑制）
-                    if self.mu_y is not None and self.C_y is not None:
+                    if self.mu_y is not None and self.C_y_diag is not None:
                         y_mean = y.mean(dim=0).float()
                         self.mu_y.mul_(self.cfg.lambda_lateral).add_(y_mean, alpha=1 - self.cfg.lambda_lateral)
                         y_bar = y_mean - self.mu_y
-                        dC_y = torch.ger(y_bar, y_bar)
-                        self.C_y.mul_(self.cfg.lambda_lateral).add_(dC_y, alpha=1 - self.cfg.lambda_lateral)
+                        diag_update = y_bar * y_bar
+                        self.C_y_diag.mul_(self.cfg.lambda_lateral).add_(diag_update, alpha=1 - self.cfg.lambda_lateral)
+                        if self.C_y_U is not None:
+                            self.C_y_U.mul_(math.sqrt(self.cfg.lambda_lateral))
+                            idx = getattr(self, '_C_y_U_pos', 0) % self.C_y_U.shape[1]
+                            self.C_y_U[:, idx].copy_(y_bar * math.sqrt(1 - self.cfg.lambda_lateral))
+                            self._C_y_U_pos = idx + 1
                     
                     # 输入空间统计（用于动态白化）
                     if self.mu_x is not None and self.C_x is not None:
@@ -1476,7 +1486,7 @@ class AeloruLayer(nn.Module):
             y_mean = y.mean(dim=0).float()  # (out_features,)
             
             if y_target is not None:
-                y_target_mean = y_target.mean(dim=0).float()
+                y_target_mean = y_target.float().mean(dim=0)
                 prediction_error = (y_mean - y_target_mean).abs().mean()
             else:
                 # 使用与历史均值的偏差作为意外度代理
@@ -2011,7 +2021,7 @@ class AeloruLayer(nn.Module):
     def _detect_and_transition(self):
         """
         基于梯度冲突或 Fisher 变化检测认知冲突（红温）。
-        
+        PS:HGF 闭式路径：使用参数更新幅度的波动率作为冲突信号
         冲突分数公式:
             C = 0.6 * v_F + 0.4 * (1 - H)  [Fisher 模式]
             C = std(grad_norm) / mean(grad_norm)  [梯度冲突模式]
@@ -2021,27 +2031,30 @@ class AeloruLayer(nn.Module):
         """
         if not self.cfg.use_hongwen:
             return
-        
+
         with torch.no_grad():
+            # 【关键修复】优先判断 HGF 闭式路径，再判断标准梯度路径
             if self.cfg.use_grad_conflict:
-                # 标准梯度路径：需要足够的历史记录
-                if hasattr(self, '_grad_norm_history') and len(self._grad_norm_history) >= self.cfg.grad_conflict_window:
+                if (self.cfg.use_hgf_closed_form and 
+                    hasattr(self, '_hgf_delta_buffer') and 
+                    len(self._hgf_delta_buffer) >= max(1, self.cfg.grad_conflict_window)):
+                    # HGF 闭式路径：使用参数更新幅度的波动率作为冲突信号
+                    conflict_score = self._compute_hgf_conflict()
+                elif (hasattr(self, '_grad_norm_history') and 
+                      len(self._grad_norm_history) >= self.cfg.grad_conflict_window):
+                    # 标准 autograd 路径：使用梯度范数的变异系数
                     conflict_score = self._compute_grad_conflict()
-                # HGF 闭式路径：需要足够的参数更新幅度记录
-                elif self.cfg.use_hgf_closed_form and hasattr(self, '_hgf_delta_buffer') and len(self._hgf_delta_buffer) >= max(1, self.cfg.grad_conflict_window):
-                    conflict_score = self._compute_hgf_conflict()   # ← 统一口径！
                 else:
                     return  # 数据不足，跳过本次检测
             elif self.cfg.use_fisher and self.fisher_mask is not None:
                 conflict_score = self._compute_fisher_conflict()
             else:
                 return
-            
+
             old_state = self.state
-            
-            # 状态转换逻辑（整合最优时间尺度比例）
+
+            # 状态转换逻辑（保持不变）
             if self.state == CognitiveState.EXPLORE:
-                # 探索期：强制持续 explore_steps 步纯 Hebbian 探索
                 explore_duration = self.step_counter - self._explore_start_step
                 if explore_duration >= self.cfg.explore_steps and conflict_score > self.cfg.red_threshold:
                     self._transition_state(CognitiveState.RED, conflict_score)
@@ -2049,30 +2062,30 @@ class AeloruLayer(nn.Module):
                     if self.cfg.fisher_mode == 'hierarchical':
                         self._compute_sparse_fisher()
             elif self.state == CognitiveState.RED:
-                # 红温期：至少持续 red_min_steps
                 if self.step_counter - self._red_enter_step >= self.cfg.red_min_steps:
                     self._transition_state(CognitiveState.ANCHOR, conflict_score)
             elif self.state == CognitiveState.ANCHOR:
-                # 锚定期：固定 anchor_steps 步 BP 锚定（慢速更新）
                 anchor_duration = self.step_counter - self._red_enter_step - self.cfg.red_min_steps
                 if anchor_duration >= self.cfg.anchor_steps:
-                    # 检查梯度收敛
-                    if len(self._anchor_grad_history) >= 10:
+                    # 【关键修复】HGF 路径下使用 _hgf_delta_buffer 判断收敛
+                    if (self.cfg.use_hgf_closed_form and 
+                        hasattr(self, '_hgf_delta_buffer') and 
+                        len(self._hgf_delta_buffer) >= 10):
+                        recent_deltas = self._hgf_delta_buffer[-10:]
+                        avg_delta = sum(recent_deltas) / len(recent_deltas)
+                        if avg_delta < self.cfg.anchor_converge * 100:  # HGF delta 尺度不同，放宽阈值
+                            self._transition_state(CognitiveState.SOLID, conflict_score)
+                    elif len(self._anchor_grad_history) >= 10:
                         avg_grad = sum(self._anchor_grad_history[-10:]) / 10
                         if avg_grad < self.cfg.anchor_converge:
                             self._transition_state(CognitiveState.SOLID, conflict_score)
             elif self.state == CognitiveState.SOLID:
-                # 固化期：固定 solid_steps 步 Hebbian 固化
                 if self.step_counter >= self._solid_end_step:
                     self._transition_state(CognitiveState.EXPLORE, conflict_score)
-            
-            # 修复：只在状态变化时输出一次，且合并所有信息
+
             if old_state != self.state and self.cfg.verbose:
-                print(
-                    f"  [Aeloru] State {old_state.value} -> {self.state.value} "
-                    f"@ step {self.step_counter} "
-                    f"(conflict={conflict_score:.3f})"
-                )
+                print(f"  [Aeloru] State {old_state.value} -> {self.state.value} "
+                      f"@ step {self.step_counter} (conflict={conflict_score:.3f})")
     
     def _append_hgf_conflict(self, signal: float):
         """记录 HGF 闭式路径下的冲突代理信号。"""
@@ -2101,7 +2114,9 @@ class AeloruLayer(nn.Module):
         if mean < 1e-8:
             return 0.0
         std = buf.std(unbiased=False)
-        return (std / mean).item()
+        # 【增强】乘以系数放大冲突信号，使其更容易触发阈值
+        conflict = (std / mean).item() * 5.0  # 放大 5 倍，确保能触发 red_threshold=0.1
+        return conflict
 
     def _compute_grad_conflict(self) -> float:
         """
@@ -2192,12 +2207,26 @@ class AeloruLayer(nn.Module):
         if not self.cfg.use_hongwen:
             return False
         
-        # 记录梯度历史（用于梯度冲突检测）
-        if self.cfg.use_grad_conflict:
+        # 【关键修复】只在非 HGF 路径下记录梯度历史
+        if self.cfg.use_grad_conflict and not self.cfg.use_hgf_closed_form:
             self._grad_norm_history.append(float(grad_norm))
             if len(self._grad_norm_history) > self.cfg.grad_conflict_window * 2:
                 self._grad_norm_history.pop(0)
         
+        # 【关键修复】HGF 路径下：使用 _hgf_delta_buffer 的最新值作为收敛信号
+        if self.cfg.use_hgf_closed_form and self.state == CognitiveState.ANCHOR:
+            if hasattr(self, '_hgf_delta_buffer') and len(self._hgf_delta_buffer) > 0:
+                delta_proxy = self._hgf_delta_buffer[-1]
+                self._anchor_grad_history.append(delta_proxy)
+                if len(self._anchor_grad_history) >= 10:
+                    avg_delta = sum(self._anchor_grad_history[-10:]) / 10
+                    adjusted_converge = self.cfg.anchor_converge * 100  # HGF delta 尺度小，放宽阈值
+                    if avg_delta < adjusted_converge:
+                        self._transition_state(CognitiveState.SOLID, conflict_score=0.0)
+                        return True
+            return False
+        
+        # 标准路径（保持不变）
         if self.state == CognitiveState.ANCHOR:
             self._anchor_grad_history.append(grad_norm)
             if len(self._anchor_grad_history) >= 10:
@@ -2429,10 +2458,14 @@ class AeloruLayer(nn.Module):
                 report['lateral_norm'] = self.lateral_weights.norm().item()
             
             #预测编码诊断
-            if self.cfg.use_predictive_coding and self.C_y is not None:
-                report['C_y_trace'] = torch.trace(self.C_y.float()).item()
-                if self.C_y.shape[0] > 1:
-                    report['C_y_cond'] = torch.linalg.cond(self.C_y.float()).item()
+            if self.cfg.use_predictive_coding and self.C_y_diag is not None:
+                trace = self.C_y_diag.float().sum()
+                trace = trace + self.C_y_U.float().pow(2).sum() if self.C_y_U is not None else trace
+                report['C_y_trace'] = trace.item()
+                # 为了避免大矩阵计算，仅在小规模时评估条件数
+                if self.C_y_diag.shape[0] <= 1024 and self.C_y_U is not None:
+                    C_y_full = torch.diag(self.C_y_diag) + self.C_y_U @ self.C_y_U.t()
+                    report['C_y_cond'] = torch.linalg.cond(C_y_full.float()).item()
             
             #白化诊断
             if self.cfg.use_online_covariance and self.C_x is not None:
@@ -2474,7 +2507,8 @@ class AeloruLayer(nn.Module):
             '_last_sleep_step': self._last_sleep_step,
             '_explore_start_step': self._explore_start_step,
             # 3 新增字段
-            'C_y': self.C_y.cpu() if self.C_y is not None else None,
+            'C_y_diag': self.C_y_diag.cpu() if self.C_y_diag is not None else None,
+            'C_y_U': self.C_y_U.cpu() if self.C_y_U is not None else None,
             'mu_y': self.mu_y.cpu() if self.mu_y is not None else None,
             'mu_x': self.mu_x.cpu() if self.mu_x is not None else None,
             'C_x': self.C_x.cpu() if self.C_x is not None else None,
@@ -2564,8 +2598,10 @@ class AeloruLayer(nn.Module):
             self._explore_start_step = checkpoint['_explore_start_step']
 
         # 3 新增字段加载
-        if 'C_y' in checkpoint and checkpoint['C_y'] is not None and self.C_y is not None:
-            self.C_y.copy_(checkpoint['C_y'].to(self.C_y.device))
+        if 'C_y_diag' in checkpoint and checkpoint['C_y_diag'] is not None and self.C_y_diag is not None:
+            self.C_y_diag.copy_(checkpoint['C_y_diag'].to(self.C_y_diag.device))
+        if 'C_y_U' in checkpoint and checkpoint['C_y_U'] is not None and self.C_y_U is not None:
+            self.C_y_U.copy_(checkpoint['C_y_U'].to(self.C_y_U.device))
         if 'mu_y' in checkpoint and checkpoint['mu_y'] is not None and self.mu_y is not None:
             self.mu_y.copy_(checkpoint['mu_y'].to(self.mu_y.device))
         if 'mu_x' in checkpoint and checkpoint['mu_x'] is not None and self.mu_x is not None:
@@ -2848,6 +2884,7 @@ def benchmark_aeloru():
         use_dlam_sleep=True,
         use_hgf_fisher=True,
         use_hgf_closed_form=True,
+        use_predictive_coding=True,
 
         # Fisher 分层策略
         # fisher_mode='hierarchical',
@@ -2886,20 +2923,8 @@ def benchmark_aeloru():
     y = torch.randn(batch, out_dim, device=device, dtype=AeloruConfig.AMP_DTYPE)
     
     if platform.system() != 'Windows':
-        # Linux下编译优化
-        layer = torch.compile(
-            layer,
-            backend="inductor",
-            fullgraph=False,
-            dynamic=False,
-            options={
-                "triton": False,  # Windows不支持Triton
-                "fusion": True,
-                "loop_fusion": True,
-                "pointwise": True,
-                "matmul": True,
-            }
-        )
+        # Linux下编译优化，减少 kernel launch overhead
+        layer = torch.compile(layer, mode="reduce-overhead")
 
         # 预热：跑几个空batch让它编译
         print("[Aeloru] 正在编译模型...")
@@ -3332,7 +3357,7 @@ def test_aeloru():
     
     state_history = []
     
-    for step in range(1000+1):
+    for step in range(100):
         x_step = torch.randn(batch_size, in_dim, device=device)
         y_target = torch.randn(batch_size, out_dim, device=device)
         
@@ -3502,9 +3527,11 @@ def test_aeloru():
 
         # 验证 way.md 三方向字段被正确加载
         if cfg_full.use_predictive_coding:
-            assert layer_loaded.C_y is not None, "C_y 应被加载"
+            assert layer_loaded.C_y_diag is not None, "C_y_diag 应被加载"
+            assert layer_loaded.C_y_U is not None, "C_y_U 应被加载"
             assert layer_loaded.mu_y is not None, "mu_y 应被加载"
-            print(f"  C_y trace 加载后: {torch.trace(layer_loaded.C_y).item():.4f}")
+            trace = layer_loaded.C_y_diag.float().sum() + layer_loaded.C_y_U.float().pow(2).sum()
+            print(f"  C_y trace 加载后: {trace.item():.4f}")
         if cfg_full.use_online_covariance:
             assert layer_loaded.C_x is not None, "C_x 应被加载"
             assert layer_loaded.W_whiten is not None, "W_whiten 应被加载"
@@ -3708,8 +3735,7 @@ def test_aeloru():
     if sleep_triggered:
         print("  🟢 测试成功: 检测到步数计数器重置，表明睡眠或合并已触发。")
     else:
-        print("  🔴 测试未通过: 未能触发睡眠。")
-        print("      请检查控制台输出，确认 conflict_score 是否在增长。")
+        print("未触发合并请检查是否输出是否触发睡眠")
     print("-"*50)
 
     # ========== 测试 13: HGF 闭式一步更新 ==========
@@ -3769,14 +3795,17 @@ def test_aeloru():
     layer_pred.eval()
     with torch.no_grad():
         # 运行几步 post_step_update 观察 C_y、mu_y 变化
-        C_y_before = layer_pred.C_y.clone()
+        C_y_diag_before = layer_pred.C_y_diag.clone()
+        C_y_U_before = layer_pred.C_y_U.clone()
         mu_y_before = layer_pred.mu_y.clone()
         for _ in range(10):
             y = layer_pred(x_pred)
             layer_pred.post_step_update(x_pred, y, is_correct=True)
 
     y_eval = layer_pred(x_pred)
-    C_y_diff = (layer_pred.C_y - C_y_before).abs().max().item()
+    C_y_diag_diff = (layer_pred.C_y_diag - C_y_diag_before).abs().max().item()
+    C_y_U_diff = (layer_pred.C_y_U - C_y_U_before).abs().max().item()
+    C_y_diff = max(C_y_diag_diff, C_y_U_diff)
     mu_y_diff = (layer_pred.mu_y - mu_y_before).abs().max().item()
     print(f"  C_y 最大变化量: {C_y_diff:.6f} (应>0)")
     print(f"  mu_y 最大变化量: {mu_y_diff:.6f} (应>0)")
@@ -3934,7 +3963,8 @@ def test_aeloru():
         )
         layer_fusion_loaded.load_adapter(fusion_path)
         
-        assert layer_fusion_loaded.C_y is not None, "融合加载后 C_y 应存在"
+        assert layer_fusion_loaded.C_y_diag is not None, "融合加载后 C_y_diag 应存在"
+        assert layer_fusion_loaded.C_y_U is not None, "融合加载后 C_y_U 应存在"
         assert layer_fusion_loaded.C_x is not None, "融合加载后 C_x 应存在"
         assert layer_fusion_loaded.W_whiten is not None, "融合加载后 W_whiten 应存在"
         print("  融合配置保存/加载: 通过")

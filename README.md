@@ -28,9 +28,8 @@ AeloRu is a research framework for investigating **semantic structures in PEFT w
 
 ## Expected Contributions
 
-1. **First HiRA-DoRA fusion** with amplitude-direction decoupling on modulation terms
-2. **Hebbian-RL hybrid learning** for real-time adaptive plasticity
-3. **Adapter-level asynchrony** enabling zero-latency serving during continuous learning
+1. **Hebbian-RL hybrid learning** for real-time adaptive plasticity
+2. **Adapter-level asynchrony** enabling zero-latency serving during continuous learning
 
 ---
 
