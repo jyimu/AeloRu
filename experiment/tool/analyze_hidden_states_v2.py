@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 
 plt.rcParams['font.sans-serif'] = ['SimHei']
 
-# 添加父目录到路径（假设 logger 在同级目录）
+# 添加父目录到路径(假设 logger 在同级目录)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from aeloru_logger import get_logger, device, LOG_ROOT
 

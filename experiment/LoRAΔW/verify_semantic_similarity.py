@@ -47,7 +47,7 @@ class SemanticSimilarityVerifier:
         method: 'full_vector' | 'layer_weighted' | 'magnitude'
         """
         if method == 'full_vector':
-            # 使用完整响应向量（推荐）
+            # 使用完整响应向量(推荐)
             vec1 = np.concatenate([resp1[layer]['response'] for layer in sorted(resp1.keys())])
             vec2 = np.concatenate([resp2[layer]['response'] for layer in sorted(resp2.keys())])
             return 1 - cosine(vec1, vec2)
@@ -68,7 +68,7 @@ class SemanticSimilarityVerifier:
             return np.average(sims, weights=weights)
         
         else:  # magnitude
-            # 原来的模长方法（不推荐）
+            # 原来的模长方法(不推荐)
             mag1 = np.array([resp1[layer]['magnitude'] for layer in sorted(resp1.keys())])
             mag2 = np.array([resp2[layer]['magnitude'] for layer in sorted(resp2.keys())])
             return 1 - cosine(mag1, mag2)
@@ -94,7 +94,7 @@ class SemanticSimilarityVerifier:
             resp1 = self.compute_delta_w_response(emb1)
             resp2 = self.compute_delta_w_response(emb2)
             
-            # 计算 ΔW 响应相似度（使用新方法）
+            # 计算 ΔW 响应相似度(使用新方法)
             delta_w_similarity = self.compute_delta_w_similarity(resp1, resp2, method)
             
             results.append({
@@ -209,7 +209,7 @@ if __name__ == "__main__":
         delta_w_dict.update(data)
     print(f"共加载 {len(json_paths)} 个文件，合并层数 {len(delta_w_dict)}")
 
-    # 运行验证（三种方法对比）
+    # 运行验证(三种方法对比)
     print("\n" + "=" * 60)
     print("📊 对比不同相似度计算方法")
     print("=" * 60)

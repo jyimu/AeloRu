@@ -50,7 +50,7 @@ class SemanticSimilarityVerifier:
         method: 'full_vector' | 'layer_weighted' | 'magnitude'
         """
         if method == 'full_vector':
-            # 使用完整响应向量（推荐）
+            # 使用完整响应向量(推荐)
             vec1 = np.concatenate([resp1[layer]['response'] for layer in sorted(resp1.keys())])
             vec2 = np.concatenate([resp2[layer]['response'] for layer in sorted(resp2.keys())])
             return 1 - cosine(vec1, vec2)
@@ -71,14 +71,14 @@ class SemanticSimilarityVerifier:
             return np.average(sims, weights=weights)
         
         else:  # magnitude
-            # 原来的模长方法（不推荐）
+            # 原来的模长方法(不推荐)
             mag1 = np.array([resp1[layer]['magnitude'] for layer in sorted(resp1.keys())])
             mag2 = np.array([resp2[layer]['magnitude'] for layer in sorted(resp2.keys())])
             return 1 - cosine(mag1, mag2)
     
     def verify_with_details(self, text_pairs, method='full_vector', threshold=0.5):
         """
-        验证并返回详细结果（包含错误分析）
+        验证并返回详细结果(包含错误分析)
         """
         results = []
         errors = []
@@ -284,7 +284,7 @@ if __name__ == "__main__":
     verifier = SemanticSimilarityVerifier(model, tokenizer, delta_w_dict)
     test_pairs = create_test_pairs()
     
-    # 运行验证（可以调整阈值）
+    # 运行验证(可以调整阈值)
     threshold = 0.5  # 可以改为 0.45 试试
     print(f"\n🔍 使用阈值：{threshold}")
     results = verifier.verify_with_details(test_pairs, method='full_vector', threshold=threshold)
@@ -298,7 +298,7 @@ if __name__ == "__main__":
         json.dump(results, f, ensure_ascii=False, indent=2)
     print(f"✅ 详细结果已保存：{output_file}")
     
-    # 保存错误题目列表（方便查看）
+    # 保存错误题目列表(方便查看)
     errors_only = {
         'total_errors': results['errors'],
         'accuracy': results['accuracy'],

@@ -5,16 +5,16 @@ Aeloru 单步训练性能分析器 (PyTorch Profiler Chrome Trace)
 ============================================================
 
 功能：
-1. 使用 PyTorch Profiler 记录单步训练（forward + backward + post_step_update）
+1. 使用 PyTorch Profiler 记录单步训练(forward + backward + post_step_update)
 2. 自动解析 Chrome Trace JSON，计算各模块用时占比
-3. 生成可视化报告（表格 + 饼图）
+3. 生成可视化报告(表格 + 饼图)
 4. 支持 CPU-only 和 CUDA 两种模式
 
 核心流程:
 1. warmup: 预热指定步数，稳定 GPU 状态
 2. profile: 使用 torch.profiler 采集 Chrome Trace
 3. parse: 解析 traceEvents，按模块分类聚合耗时
-4. report: 生成文本报告（含瓶颈分析与优化建议）
+4. report: 生成文本报告(含瓶颈分析与优化建议)
 5. chart: 生成饼图与水平条形图
 
 输出：
@@ -40,7 +40,7 @@ import torch.nn.functional as F
 from torch.profiler import profile, record_function, ProfilerActivity
 
 # =============================================================================
-# 可选依赖：matplotlib（图表生成）
+# 可选依赖：matplotlib(图表生成)
 # =============================================================================
 try:
     import matplotlib
@@ -77,8 +77,8 @@ class ProfilerConfig:
 
     Args:
         # --- 维度设置 ---
-        in_features: 输入特征维度（模拟 Qwen2.5-0.5B 的某一层）
-        out_features: 输出特征维度（词表大小）
+        in_features: 输入特征维度(模拟 Qwen2.5-0.5B 的某一层)
+        out_features: 输出特征维度(词表大小)
         r: LoRA 秩
         lora_alpha: LoRA 缩放因子
         batch_size: 训练批次大小
@@ -88,7 +88,7 @@ class ProfilerConfig:
         device: 计算设备，"cuda" 或 "cpu"
 
         # --- Profiler 设置 ---
-        warmup_steps: 预热步数（稳定 GPU 状态）
+        warmup_steps: 预热步数(稳定 GPU 状态)
         profile_steps: 正式 profiling 步数
 
         # --- Aeloru 功能开关 ---
@@ -152,7 +152,7 @@ class ProfilerConfig:
     use_hgf_closed_form: bool = True
 
     # --- 输出路径 ---
-    # 默认使用当前工作目录下的子目录，确保跨平台（Windows/Linux）可用
+    # 默认使用当前工作目录下的子目录，确保跨平台(Windows/Linux)可用
     output_dir: str = field(default_factory=lambda: os.path.join(os.getcwd(), "profiler_output"))
     trace_filename: str = "profiler_step_0.json"
     report_filename: str = "profiler_report.txt"
@@ -168,7 +168,7 @@ class AeloruProfiler:
     Aeloru 单步训练性能分析器
 
     分析维度：
-    - Forward: 前向传播各子模块（线性变换、LoRA、侧向抑制、稳态增益等）
+    - Forward: 前向传播各子模块(线性变换、LoRA、侧向抑制、稳态增益等)
     - Backward: 反向传播与梯度计算
     - Optimizer: 优化器参数更新
     - Post-Step: Hebbian + Hong Wen 状态机 + ReLoRA 合并 + DLAM 睡眠
@@ -210,7 +210,7 @@ class AeloruProfiler:
         流程：
         1. 将 ProfilerConfig 映射为 AeloruConfig
         2. 实例化 AeloruLayer 并迁移到目标设备
-        3. 初始化预训练权重（W0 + bias）
+        3. 初始化预训练权重(W0 + bias)
         4. 构建 AdamW 优化器
         """
         aeloru_cfg = AeloruConfig(
@@ -236,7 +236,7 @@ class AeloruProfiler:
             use_online_covariance=self.cfg.use_online_covariance,
             use_whitening=self.cfg.use_whitening,
             use_hgf_closed_form=self.cfg.use_hgf_closed_form,
-            # 性能优化（关闭 verbose 与诊断，避免 .item() 同步）
+            # 性能优化(关闭 verbose 与诊断，避免 .item() 同步)
             verbose=False,
             enable_cognitive_report=False,
             diagnostic_interval=100000,
@@ -258,7 +258,7 @@ class AeloruProfiler:
         self.layer.set_pretrained_weight(W0, bias)
         self.layer.train()
 
-        # 优化器（fused=True 加速 CUDA）
+        # 优化器(fused=True 加速 CUDA)
         self.optimizer = torch.optim.AdamW(
             self.layer.get_trainable_params(),
             lr=1e-3,
@@ -294,7 +294,7 @@ class AeloruProfiler:
             raise RuntimeError(
                 f"[Profiler] 无法创建输出目录: {abs_dir}\n"
                 f"  原因: {e}\n"
-                f"  请检查磁盘空间、路径长度（Windows 限制 260 字符）或权限设置。"
+                f"  请检查磁盘空间、路径长度(Windows 限制 260 字符)或权限设置。"
             ) from e
 
         test_file = os.path.join(abs_dir, ".write_test")
@@ -318,7 +318,7 @@ class AeloruProfiler:
 
         Args:
             file_path: 待验证的文件路径
-            operation: 当前操作描述（用于错误信息）
+            operation: 当前操作描述(用于错误信息)
         """
         if not os.path.isfile(file_path):
             raise FileNotFoundError(
@@ -365,7 +365,7 @@ class AeloruProfiler:
         1. 预热：运行若干空 step 稳定 GPU 状态
         2. 正式 profiling：使用 record_function 标记各阶段
         3. 导出 Chrome Trace JSON
-        4. 打印 profiler 摘要（按 CPU / CUDA 时间排序）
+        4. 打印 profiler 摘要(按 CPU / CUDA 时间排序)
 
         Returns:
             trace_path: Chrome Trace 文件绝对路径
@@ -409,7 +409,7 @@ class AeloruProfiler:
         ) as prof:
             for step in range(self.cfg.profile_steps):
                 with record_function("full_step"):
-                    # 生成输入与目标（目标为整数类别索引）
+                    # 生成输入与目标(目标为整数类别索引)
                     x = torch.randn(
                         self.cfg.batch_size, self.cfg.in_features,
                         device=self.device, dtype=AeloruConfig.AMP_DTYPE
@@ -515,7 +515,7 @@ class AeloruProfiler:
         """
         name_lower = name.lower()
 
-        # Post-step 优先级最高（避免被 forward/optimizer 误分类）
+        # Post-step 优先级最高(避免被 forward/optimizer 误分类)
         if any(k in name_lower for k in [
             'post_step', 'hebbian', 'fisher', 'merge',
             'sleep', 'lateral', 'volatility', 'homeostatic',
@@ -550,7 +550,7 @@ class AeloruProfiler:
         return 'other'
 
     # -------------------------------------------------------------------------
-    # 数据预处理（报告与图表共享）
+    # 数据预处理(报告与图表共享)
     # -------------------------------------------------------------------------
 
     @staticmethod
@@ -568,10 +568,10 @@ class AeloruProfiler:
 
         Args:
             timing_dict: 原始耗时字典
-            min_pct: 最小占比阈值（默认 1%），低于此值的项合并到 other
+            min_pct: 最小占比阈值(默认 1%)，低于此值的项合并到 other
 
         Returns:
-            filtered: 处理后的耗时字典（含可能的 "other" 项）
+            filtered: 处理后的耗时字典(含可能的 "other" 项)
             total: 总耗时
         """
         total = sum(timing_dict.values())
@@ -594,8 +594,8 @@ class AeloruProfiler:
 
         报告内容：
         1. 运行环境与配置摘要
-        2. 各模块耗时分析（含柱状图，与饼图数据一致）
-        3. 关键洞察（瓶颈识别、F/B 比例、Post-step 开销）
+        2. 各模块耗时分析(含柱状图，与饼图数据一致)
+        3. 关键洞察(瓶颈识别、F/B 比例、Post-step 开销)
         4. 针对性优化建议
 
         Args:
@@ -618,6 +618,8 @@ class AeloruProfiler:
         lines.append(f"设备: {self.cfg.device}")
         lines.append(f"维度: {self.cfg.in_features} -> {self.cfg.out_features}")
         lines.append(f"批次: {self.cfg.batch_size} x {self.cfg.seq_len}")
+        lines.append(f"预热次数:{self.cfg.warmup_steps}次")
+        lines.append(f"测试次数:{self.cfg.profile_steps}次")
         lines.append("")
 
         # --- 功能配置 ---
@@ -647,7 +649,7 @@ class AeloruProfiler:
 
         # --- 耗时分析 ---
         lines.append("=" * 70)
-        lines.append("各模块耗时分析（占比 < 1% 的项已合并到 'other'）")
+        lines.append("各模块耗时分析(占比 < 1% 的项已合并到 'other')")
         lines.append("=" * 70)
         lines.append(f"{'模块':<25s} {'耗时(ms)':>12s} {'占比(%)':>10s} {'柱状图':>20s}")
         lines.append("-" * 70)
@@ -747,7 +749,7 @@ class AeloruProfiler:
 
     def generate_chart(self, timing_dict: Dict[str, float]) -> Optional[str]:
         """
-        生成可视化图表（饼图 + 水平条形图）。
+        生成可视化图表(饼图 + 水平条形图)。
 
         Args:
             timing_dict: parse_trace 返回的耗时字典
@@ -779,7 +781,7 @@ class AeloruProfiler:
         )
         ax1.set_title('Aeloru 单步训练耗时占比', fontsize=14, fontweight='bold')
 
-        # 水平条形图（更精确）
+        # 水平条形图(更精确)
         sorted_items = sorted(filtered.items(), key=lambda x: x[1])
         y_pos = range(len(sorted_items))
         vals = [v for _, v in sorted_items]
@@ -789,7 +791,7 @@ class AeloruProfiler:
         ax2.set_yticks(y_pos)
         ax2.set_yticklabels(labs, fontsize=9)
         ax2.set_xlabel('耗时 (ms)', fontsize=11)
-        ax2.set_title('各模块耗时对比（占比 < 1% 已合并到 other）',
+        ax2.set_title('各模块耗时对比(占比 < 1% 已合并到 other)',
                       fontsize=14, fontweight='bold')
         ax2.grid(axis='x', alpha=0.3)
 
@@ -817,7 +819,7 @@ class AeloruProfiler:
             results: {
                 'trace': Chrome Trace 路径,
                 'report': 文本报告路径,
-                'chart': 图表路径（可能为 None）,
+                'chart': 图表路径(可能为 None),
                 'timing': 耗时字典
             }
         """
@@ -868,8 +870,8 @@ def analyze_raw_trace(trace_path: str, top_k: int = 30) -> Dict[str, Any]:
 
     输出：
     - 总事件数与 Complete 事件数
-    - Top-K 最耗时操作（按单次 duration）
-    - 按操作名聚合的 Top-K 耗时（按累计 duration）
+    - Top-K 最耗时操作(按单次 duration)
+    - 按操作名聚合的 Top-K 耗时(按累计 duration)
 
     Args:
         trace_path: Chrome Trace JSON 路径
@@ -944,7 +946,7 @@ def main() -> None:
 
     流程：
     1. 加载 ProfilerConfig
-    2. 设备回退（CUDA 不可用时切 CPU）
+    2. 设备回退(CUDA 不可用时切 CPU)
     3. 创建 AeloruProfiler 并运行完整分析
     4. 输出深度原始 Trace 分析
     """

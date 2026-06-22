@@ -41,7 +41,7 @@ import warnings
 class CognitiveState(Enum):
     """Hong Wen 认知状态枚举"""
     EXPLORE = "explore"     # 自由探索期
-    RED = "red"             # 认知冲突（红温）
+    RED = "red"             # 认知冲突(红温)
     ANCHOR = "anchor"       # 过程锚定
     SOLID = "solid"         # 赫布固化
 
@@ -70,47 +70,47 @@ class AeloruConfig:
     use_energy_budget: bool = True        # 是否启用能量预算硬约束
     hebbian_before_backprop: bool = False  # False=传统顺序(先BP后HB) | True=神经科学顺序(先HB后BP)
 
-    # --- Fisher 分层策略（新增）---
+    # --- Fisher 分层策略(新增)---
     fisher_mode: str = "hierarchical"     # 'off': 禁用 | 'gradient_only': 只计算梯度 | 'hierarchical':部分使用Fisher,部分使用梯度(推荐) | 'full':全部使用Fisher
     fisher_topk_ratio: float = 0.2        # 稀疏 Fisher 仅计算 Top-K% 参数
-    fisher_compute_interval: int = 500    # 中频稀疏计算间隔（步）
-    fisher_full_snapshot_interval: int = 5000  # 低频全量快照间隔（步）
-    fisher_quant_bits: int = 8            # 快照量化位数（0=不量化）
+    fisher_compute_interval: int = 500    # 中频稀疏计算间隔(步)
+    fisher_full_snapshot_interval: int = 5000  # 低频全量快照间隔(步)
+    fisher_quant_bits: int = 8            # 快照量化位数(0=不量化)
     fisher_async: bool = True             # 异步计算快照
     fisher_bp16: bool = True              # 运行时 FP16
 
     # --- ReLoRA 参数 ---
-    merge_every: int = 1000               # 固定合并周期（步数）
+    merge_every: int = 1000               # 固定合并周期(步数)
     merge_on_red: bool = True             # 红温时是否强制合并
     async_merge: bool = True              # 异步合并
-    acc_quant_bits: int = 8               # W_acc 量化位数（0=不量化）
+    acc_quant_bits: int = 8               # W_acc 量化位数(0=不量化)
 
     # --- Hebbian 参数 ---
     hebbian_lr: float = 1e-6              # Hebbian 学习率
     hebbian_decay: float = 0.99           # 全局遗忘衰减
-    saturation_limit: float = 5.0         # 饱和上限（硬截断）
+    saturation_limit: float = 5.0         # 饱和上限(硬截断)
     hebbian_accum_steps: int = 4          # Hebbian 累积步数
 
     # --- Fisher 运行时参数 ---
     fisher_gamma: float = 10.0            # Fisher 掩码锐度
     fisher_ema: float = 0.95              # Fisher EMA 平滑系数
-    plasticity_min: float = 0.05          # 最小可塑性（防止完全冻结）
+    plasticity_min: float = 0.05          # 最小可塑性(防止完全冻结)
 
     # --- Hong Wen 红温参数 ---
     red_threshold: float = 0.65           # 冲突分数触发线
-    snapshot_interval: int = 50           # Fisher 快照间隔（步数）
+    snapshot_interval: int = 50           # Fisher 快照间隔(步数)
     anchor_converge: float = 1e-4         # 锚定期梯度收敛阈值
     solid_steps: int = 200                # 固化期持续步数
     red_min_steps: int = 50               # 红温最短持续步数
 
-    # --- 梯度冲突检测（高频层）---
+    # --- 梯度冲突检测(高频层)---
     use_grad_conflict: bool = True        # 用梯度冲突替代 Fisher 冲突
     grad_conflict_window: int = 50        # 梯度滑动窗口
     grad_conflict_threshold: float = 0.3  # 梯度变异系数阈值
 
     # --- 正交惩罚参数 ---
     ortho_lambda: float = 0.01            # 正交惩罚系数
-    ortho_lambda_anchor: float = 0.05     # 锚定期强化系数（5x）
+    ortho_lambda_anchor: float = 0.05     # 锚定期强化系数(5x)
     ortho_random_proj: int = 16           # 正交惩罚随机投影维度
 
     # --- 能量预算参数 ---
@@ -118,14 +118,14 @@ class AeloruConfig:
     energy_sample_ratio: float = 0.1      # 范数估计采样比例
 
     AMP_DTYPE: torch.dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float16
-    USE_AMP: bool = False # 是否启用自动混合精度（默认关，测试时避免 dtype 不匹配）
+    USE_AMP: bool = False # 是否启用自动混合精度(默认关，测试时避免 dtype 不匹配)
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     # --- 调试参数 ---
     verbose: bool = True                    # 是否打印日志
 
     # --- 诊断控制参数 ---
     diagnostic_interval: int = 100       # 每 N 步才打一次诊断/verbose
-    enable_cognitive_report: bool = False  # 默认关闭认知报告（避免 .item() 同步）
+    enable_cognitive_report: bool = False  # 默认关闭认知报告(避免 .item() 同步)
 
 
 # =============================================================================
@@ -229,28 +229,28 @@ class AeloruLayer(nn.Module):
     1. 低秩增量:
        DeltaW = (alpha/r) * B @ A
     
-    2. Hi-DoRA 幅度调制（可选）:
+    2. Hi-DoRA 幅度调制(可选):
        DeltaW' = (m_x * m_y^T) ⊙ DeltaW
     
-    3. Fisher 敏感度门控（可选）:
+    3. Fisher 敏感度门控(可选):
        M = 1 / (1 + gamma * F)
        DeltaW'' = DeltaW' * M
     
-    4. 能量预算硬约束（可选）:
+    4. 能量预算硬约束(可选):
        若 ||DeltaW||_F > eta*||W0||_F:
            DeltaW''' <- DeltaW * (eta*||W0||_F / ||DeltaW||_F)
     
-    5. 有效权重（加法形式，零元素解锁）:
+    5. 有效权重(加法形式，零元素解锁):
        W_eff = W0 + W_acc + DeltaW'''
     
-    6. 正交惩罚损失（可选）:
+    6. 正交惩罚损失(可选):
        L_ortho = lambda * ||DeltaW^T @ W0||_F^2
     
     其中:
-    - W0: 神圣基座（预训练权重，永久冻结）
-    - W_acc: 外置累积缓冲区（ReLoRA 合并沉淀区）
-    - A, B: 当前周期工作记忆（低秩适配器，可训练）
-    - m: 行幅度向量（Hi-DoRA 调制）
+    - W0: 神圣基座(预训练权重，永久冻结)
+    - W_acc: 外置累积缓冲区(ReLoRA 合并沉淀区)
+    - A, B: 当前周期工作记忆(低秩适配器，可训练)
+    - m: 行幅度向量(Hi-DoRA 调制)
     - F: 动态 Fisher 认知掩码
     """
     
@@ -259,10 +259,10 @@ class AeloruLayer(nn.Module):
         初始化 Aeloru 层。
         
         Args:
-            in_features: 输入维度（当 original_linear 为 None 时使用）
-            out_features: 输出维度（当 original_linear 为 None 时使用）
+            in_features: 输入维度(当 original_linear 为 None 时使用)
+            out_features: 输出维度(当 original_linear 为 None 时使用)
             cfg: AeloruConfig 配置对象
-            original_linear: 原始 nn.Linear 层（可选）。若提供，维度自动从该层读取，且该层参数会被冻结。
+            original_linear: 原始 nn.Linear 层(可选)。若提供，维度自动从该层读取，且该层参数会被冻结。
         """
         super().__init__()
         self._red_enter_step = -999999  # 用于标记红线入口
@@ -295,7 +295,7 @@ class AeloruLayer(nn.Module):
         self._solid_end_step = 0
         self._anchor_grad_history = []
         
-        # ========== 显存优化 1: W0 改为 Buffer（非 Parameter）==========
+        # ========== 显存优化 1: W0 改为 Buffer(非 Parameter)==========
         self.register_buffer('W0', torch.empty(self.out_features, self.in_features, dtype=self.cfg.AMP_DTYPE))
         self.register_buffer('bias', torch.empty(self.out_features, dtype=self.cfg.AMP_DTYPE))
 
@@ -312,14 +312,14 @@ class AeloruLayer(nn.Module):
             else:
                 self.register_buffer('W_acc', torch.zeros(self.out_features, self.in_features, dtype=self.cfg.AMP_DTYPE))
 
-        # ========== 当前周期工作记忆（低秩适配器）==========
-        # A (r, in_features): Kaiming Uniform 初始化（非零）
-        # B (out_features, r): 零初始化（保证初始 DeltaW=0）
+        # ========== 当前周期工作记忆(低秩适配器)==========
+        # A (r, in_features): Kaiming Uniform 初始化(非零)
+        # B (out_features, r): 零初始化(保证初始 DeltaW=0)
         self.lora_A = nn.Parameter(torch.empty(cfg.r, self.in_features, dtype=self.cfg.AMP_DTYPE))
         self.lora_B = nn.Parameter(torch.empty(self.out_features, cfg.r, dtype=self.cfg.AMP_DTYPE))
 
         
-        # Hi-DoRA 行幅度向量（可选）
+        # Hi-DoRA 行幅度向量(可选)
         if cfg.use_hidora:
             # 定义两个独立的向量
             self.m_x = nn.Parameter(torch.ones(self.out_features, dtype=self.cfg.AMP_DTYPE)) # 输出维度 (行)
@@ -332,7 +332,7 @@ class AeloruLayer(nn.Module):
         self._fisher_dirty = False
         
         if cfg.use_fisher and cfg.fisher_mode != 'off':
-            # 运行时掩码（FP16/FP32）
+            # 运行时掩码(FP16/FP32)
             f_dtype = torch.bfloat16 if cfg.fisher_bp16 else torch.float16
             self.register_buffer(
                 'fisher_mask', 
@@ -343,7 +343,7 @@ class AeloruLayer(nn.Module):
                 torch.ones(self.out_features, self.in_features, dtype=f_dtype)
             )
             
-            # Top-K 稀疏掩码（仅 hierarchical/sparse 模式）
+            # Top-K 稀疏掩码(仅 hierarchical/sparse 模式)
             if cfg.fisher_mode in ('hierarchical', 'sparse') and cfg.fisher_topk_ratio > 0:
                 self.register_buffer(
                     'fisher_topk_mask',
@@ -356,7 +356,7 @@ class AeloruLayer(nn.Module):
             else:
                 self.fisher_topk_mask = self.fisher_importance = None
             
-            # 全量快照（量化存储）
+            # 全量快照(量化存储)
             if cfg.fisher_mode in ('hierarchical', 'full') and cfg.fisher_quant_bits > 0:
                 self.register_buffer(
                     '_fisher_snapshot_q',
@@ -403,7 +403,7 @@ class AeloruLayer(nn.Module):
         else:
             self._merge_stream = None
         
-        # 梯度冲突检测（高频层）
+        # 梯度冲突检测(高频层)
         if cfg.use_grad_conflict:
             self._grad_norm_history = []
         
@@ -518,10 +518,10 @@ class AeloruLayer(nn.Module):
     
     def _reset_adapters(self):
         """
-        重置低秩适配器（ReLoRA 合并后调用）。
+        重置低秩适配器(ReLoRA 合并后调用)。
         
-        A 用 Kaiming Uniform（非零，保证探索新子空间）
-        B 初始化为零（保证初始 DeltaW=0，零初始化等价性）
+        A 用 Kaiming Uniform(非零，保证探索新子空间)
+        B 初始化为零(保证初始 DeltaW=0，零初始化等价性)
         m_x & m_y 重置为 1
         """
         nn.init.kaiming_uniform_(self.lora_A, a=math.sqrt(5))
@@ -640,7 +640,7 @@ class AeloruLayer(nn.Module):
     
     def apply_fisher_mask(self, delta_w: torch.Tensor) -> torch.Tensor:
         """
-        Fisher 敏感度门控：保护高 Fisher（已稳固）参数。
+        Fisher 敏感度门控：保护高 Fisher(已稳固)参数。
         
         公式: M = 1 / (1 + gamma * F)
               DeltaW'' = DeltaW' * M
@@ -700,7 +700,7 @@ class AeloruLayer(nn.Module):
         w0_norm = torch.sqrt(self.W0_norm_sq.to(delta_w.device))
         max_allowed = self.cfg.energy_eta * w0_norm
 
-        # 精确计算低秩 DeltaW 范数（O(r^3)，无需采样）
+        # 精确计算低秩 DeltaW 范数(O(r^3)，无需采样)
         dw_norm = self._delta_w_norm_exact()
 
         if dw_norm > max_allowed and dw_norm > 1e-8:
@@ -738,7 +738,7 @@ class AeloruLayer(nn.Module):
         return self.W0 + self._get_W_acc() + delta_w
     
     # =================================================================
-    # 前向传播（纯前向，无任何副作用）
+    # 前向传播(纯前向，无任何副作用)
     # =================================================================
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -796,7 +796,7 @@ class AeloruLayer(nn.Module):
         return y.to(input_dtype)
     
     # =================================================================
-    # 训练步后处理（Hebbian + 状态机 + 合并）
+    # 训练步后处理(Hebbian + 状态机 + 合并)
     # 必须在 optimizer.step() 之后调用，此时计算图已销毁
     # =================================================================
     
@@ -808,8 +808,8 @@ class AeloruLayer(nn.Module):
         原地操作安全。
         
         流程：
-        1. Hebbian 更新（累积到缓冲）
-        2. Hong Wen 状态检测（可能触发 _flush_hebbian）
+        1. Hebbian 更新(累积到缓冲)
+        2. Hong Wen 状态检测(可能触发 _flush_hebbian)
         3. 检查固定周期合并
         
         Args:
@@ -872,7 +872,7 @@ class AeloruLayer(nn.Module):
             return False
     
     # =================================================================
-    # 正交惩罚损失（随机投影近似）
+    # 正交惩罚损失(随机投影近似)
     # =================================================================
     
     def get_ortho_penalty(self) -> torch.Tensor:
@@ -883,7 +883,7 @@ class AeloruLayer(nn.Module):
         
         梯度效应：将 DeltaW 推向 W0 的左零空间，自动避免重复学习。
         
-        大矩阵时使用随机投影近似（Hutchinson 估计）：
+        大矩阵时使用随机投影近似(Hutchinson 估计)：
         L_ortho ~= lambda * ||R^T DeltaW^T W0 R||_F^2 * (d_in / k)
         
         Returns:
@@ -907,7 +907,7 @@ class AeloruLayer(nn.Module):
         k = self.cfg.ortho_random_proj
         
         if k > 0 and min(delta_w.shape) > k:
-            # 随机投影近似（使用 float32 避免低精度问题）
+            # 随机投影近似(使用 float32 避免低精度问题)
             self._ortho_proj = torch.randn(self.in_features, k, device=delta_w.device, dtype=torch.float32)
             proj_w0 = torch.mm(self.W0.float(), self._ortho_proj)      # (out, k)
             proj_delta = torch.mm(delta_w.float(), self._ortho_proj)   # (out, k)
@@ -919,7 +919,7 @@ class AeloruLayer(nn.Module):
             return lam * overlap.norm(p='fro') ** 2
     
     # =================================================================
-    # Hebbian-Fisher 双向联动（累积优化版）
+    # Hebbian-Fisher 双向联动(累积优化版)
     # =================================================================
     
     def hebbian_update(self, x: torch.Tensor, y: torch.Tensor, is_correct: bool = True):
@@ -927,9 +927,9 @@ class AeloruLayer(nn.Module):
         Hebbian-Fisher 双向联动更新。
         
         核心机制：
-        1. Fisher -> Hebbian: 高 Fisher 区域降低可塑性（突触稳固）
+        1. Fisher -> Hebbian: 高 Fisher 区域降低可塑性(突触稳固)
            可塑性 = exp(-gamma * F)，硬下限 p_min
-        2. Hebbian -> Fisher: 更新冲击提升 Fisher（记录学习痕迹）
+        2. Hebbian -> Fisher: 更新冲击提升 Fisher(记录学习痕迹)
            F_t = beta*F_{t-1} + (1-beta)*impact
         3. 全局遗忘衰减防止过度累积
            A_t = decay * A_{t-1}, B_t = decay * B_{t-1}
@@ -943,7 +943,7 @@ class AeloruLayer(nn.Module):
             return
         
         with torch.no_grad():
-            # 3D 输入适配（原地 reshape）
+            # 3D 输入适配(原地 reshape)
             if x.dim() == 3:
                 x = x.reshape(-1, x.size(-1))
             if y.dim() == 3:
@@ -960,7 +960,7 @@ class AeloruLayer(nn.Module):
             # dA: (r, in_features) = y_mean[:r] (r,) @ x_mean (in,)
             raw_dA = sign * self.cfg.hebbian_lr * torch.ger(y_mean[:self.cfg.r], x_mean)
             
-            # --- Fisher 可塑性门控（Fisher -> Hebbian）---
+            # --- Fisher 可塑性门控(Fisher -> Hebbian)---
             if self.cfg.use_fisher and self.fisher_mask is not None:
                 fisher_per_out = self.fisher_mask.mean(dim=1).float()   # (out_features,)
                 fisher_per_in = self.fisher_mask.mean(dim=0).float()    # (in_features,)
@@ -973,7 +973,7 @@ class AeloruLayer(nn.Module):
                     -self.cfg.fisher_gamma * fisher_per_in
                 ).unsqueeze(0)  # (1, in_features)
                 
-                # 硬下限保护（防止完全冻结）
+                # 硬下限保护(防止完全冻结)
                 plasticity_B = plasticity_B.clamp(min=self.cfg.plasticity_min)
                 plasticity_A = plasticity_A.clamp(min=self.cfg.plasticity_min)
                 
@@ -1111,7 +1111,7 @@ class AeloruLayer(nn.Module):
                 print(f"  [Aeloru] Full Fisher snapshot @ step {self.step_counter}")
     
     # =================================================================
-    # Hong Wen 认知状态机（分层冲突检测）
+    # Hong Wen 认知状态机(分层冲突检测)
     # =================================================================
     
     def _hebbian_allowed(self) -> bool:
@@ -1128,7 +1128,7 @@ class AeloruLayer(nn.Module):
     
     def _detect_and_transition(self):
         """
-        基于梯度冲突或 Fisher 变化检测认知冲突（红温）。
+        基于梯度冲突或 Fisher 变化检测认知冲突(红温)。
         
         冲突分数公式:
             C = 0.6 * v_F + 0.4 * (1 - H)  [Fisher 模式]
@@ -1180,7 +1180,7 @@ class AeloruLayer(nn.Module):
             return 0.0
         
         # ========== 修复：全程 GPU 张量，最后只 .item() 一次 ==========
-        # 历史列表转 GPU 张量（避免反复创建）
+        # 历史列表转 GPU 张量(避免反复创建)
         if not hasattr(self, '_grad_norm_tensor') or len(self._grad_norm_history) != getattr(self, '_grad_norm_history_len', 0):
             self._grad_norm_tensor = torch.tensor(
                 self._grad_norm_history[-self.cfg.grad_conflict_window:], 
@@ -1204,7 +1204,7 @@ class AeloruLayer(nn.Module):
         return result
     
     def _compute_fisher_conflict(self) -> float:
-        """中频 Fisher 冲突（备用）"""
+        """中频 Fisher 冲突(备用)"""
         if self.fisher_mask is None:
             return 0.0
         snapshot = self._get_fisher_snapshot()
@@ -1248,7 +1248,7 @@ class AeloruLayer(nn.Module):
         if not self.cfg.use_hongwen:
             return False
         
-        # 记录梯度历史（用于梯度冲突检测）
+        # 记录梯度历史(用于梯度冲突检测)
         if self.cfg.use_grad_conflict:
             self._grad_norm_history.append(float(grad_norm))
             if len(self._grad_norm_history) > self.cfg.grad_conflict_window * 2:
@@ -1264,7 +1264,7 @@ class AeloruLayer(nn.Module):
         return False
     
     # =================================================================
-    # ReLoRA 外置合并（异步优化版）
+    # ReLoRA 外置合并(异步优化版)
     # =================================================================
     
     def should_merge(self) -> bool:
@@ -1322,13 +1322,13 @@ class AeloruLayer(nn.Module):
         建议只在 diagnostic_interval 时调用，不要每步调用。
         """
         with torch.no_grad():
-            # 基础指标（无同步）
+            # 基础指标(无同步)
             report = {
                 'state': self.state.value,
                 'step': self.step_counter,
             }
             
-            # 范数计算（会同步，但必要）
+            # 范数计算(会同步，但必要)
             report['w_acc_norm'] = self._get_W_acc().norm().item()
             report['delta_w_norm'] = self.compute_delta_w().norm().item()
             
@@ -1350,7 +1350,7 @@ class AeloruLayer(nn.Module):
     # =================================================================
     
     def save_adapter(self, path: str):
-        """保存 Aeloru 适配器（安全版）"""
+        """保存 Aeloru 适配器(安全版)"""
         cfg_dict = {k: v for k, v in self.cfg.__dict__.items() if not k.startswith('_')}
         checkpoint = {
             'cfg_dict': cfg_dict,
@@ -1386,7 +1386,7 @@ class AeloruLayer(nn.Module):
             print(f"保存至 {os.path.abspath(path)}")
     
     def load_adapter(self, path: str):
-        """加载 Aeloru 适配器（安全版）"""
+        """加载 Aeloru 适配器(安全版)"""
         checkpoint = torch.load(path, map_location=self.W0.device, weights_only=True)
         assert checkpoint['cfg_dict']['r'] == self.cfg.r
         assert checkpoint['cfg_dict']['in_features'] == self.cfg.in_features
@@ -1439,12 +1439,12 @@ def inject_aeloru(
     Args:
         model: 待注入的 PyTorch 模型
         target_names: 目标层名列表，默认 Transformer 常见层
-        cfg: AeloruConfig 配置对象（优先）
-        r: LoRA 秩（cfg 为 None 时使用）
-        alpha: LoRA 缩放因子（cfg 为 None 时使用）
+        cfg: AeloruConfig 配置对象(优先)
+        r: LoRA 秩(cfg 为 None 时使用)
+        alpha: LoRA 缩放因子(cfg 为 None 时使用)
     
     Returns:
-        注入后的模型（原地修改）
+        注入后的模型(原地修改)
     
     PS:
     优化注入函数：
@@ -1526,11 +1526,11 @@ def train_aeloru_step(
     单步 Aeloru 训练封装。
     
     关键时序：
-    1. 处理上一轮合并后的延迟清理（避免丢掉刚更新的动量）
+    1. 处理上一轮合并后的延迟清理(避免丢掉刚更新的动量)
     2. forward()        -> 纯前向，不修改参数
     3. backward()       -> 基于 forward 时的参数版本计算梯度
     4. optimizer.step() -> 应用梯度
-    5. post_step_update() -> Hebbian + 状态机 + 合并（此时计算图已销毁&设置延迟清理标志）
+    5. post_step_update() -> Hebbian + 状态机 + 合并(此时计算图已销毁&设置延迟清理标志)
     
     Args:
         layer: AeloruLayer 实例
@@ -1636,8 +1636,8 @@ def test_aeloru():
     Aeloru 完整测试验证脚本。
     
     测试覆盖：
-    1. 零初始化等价性（W_eff(t=0) == W0）
-    2. 功能开关消融（所有开关独立测试）
+    1. 零初始化等价性(W_eff(t=0) == W0)
+    2. 功能开关消融(所有开关独立测试)
     3. Hebbian-Fisher 双向联动
     4. Hong Wen 状态机转换
     5. ReLoRA 合并重置
@@ -1708,7 +1708,7 @@ def test_aeloru():
     print(f"{'='*70}")
     
     switch_configs = [
-        ("全关（仅基础LoRA）", {
+        ("全关(仅基础LoRA)", {
             'use_hidora': False, 'use_relora': False, 'use_hebbian': False,
             'use_fisher': False, 'use_hongwen': False,
             'use_orthogonal_penalty': False, 'use_energy_budget': False,
@@ -2026,8 +2026,8 @@ def test_aeloru():
     print(f"{'='*70}")
     print("\n功能覆盖清单：")
     print("  ✅ 零初始化等价性")
-    print("  ✅ 功能开关消融（10种组合）")
-    print("  ✅ Hebbian-Fisher 双向联动（含方差）")
+    print("  ✅ 功能开关消融(10种组合)")
+    print("  ✅ Hebbian-Fisher 双向联动(含方差)")
     print("  ✅ Hong Wen 四相状态机")
     print("  ✅ ReLoRA 合并重置")
     print("  ✅ 正交惩罚损失")
@@ -2050,7 +2050,7 @@ def benchmark_aeloru():
     in_dim, out_dim, batch = 896, 151000, 2 #以Qwen2.5-0.5B为例
     steps = 100
 
-    # Windows 下禁用异步 Stream（WDDM 驱动假异步）
+    # Windows 下禁用异步 Stream(WDDM 驱动假异步)
     async_flag = False if IS_WINDOWS else True
 
     cfg = AeloruConfig(

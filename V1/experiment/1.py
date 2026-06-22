@@ -84,7 +84,7 @@ torch.backends.cudnn.benchmark = True
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
 
-# 启用内存高效的注意力（Qwen2原生支持）
+# 启用内存高效的注意力(Qwen2原生支持)
 torch.backends.cuda.enable_flash_sdp(True)
 torch.backends.cuda.enable_mem_efficient_sdp(True)
 
@@ -109,7 +109,7 @@ class TrainConfig:
     max_grad_norm: float = 1.0
     
     # 性能监控
-    log_interval: int = 20       # 每 20 步更新进度条（避免 CUDA 同步）
+    log_interval: int = 20       # 每 20 步更新进度条(避免 CUDA 同步)
     eval_every_n_epoch: int = 1  # 每几 epoch 评估一次
     
     # 系统
@@ -162,7 +162,7 @@ class StreamingAccuracy:
         return acc, avg_loss
 
 
-# ========================= ReLoRA 训练器（Bug 修复版）========================
+# ========================= ReLoRA 训练器(Bug 修复版)========================
 class ReLoRATrainer:
     def __init__(self, model, merge_every: int = 1000):
         self.model = model
@@ -355,7 +355,7 @@ def create_model(method: str, num_labels: int, pad_token_id: int):
             print(f"[Optimize] torch.compile FAILED: {e}")
             print(f"[Optimize] Fallback to eager mode")
             # 确保如果 compile 失败，model 还是原始未 compile 的版本
-            # （dummy forward 已经修改了状态，但模型结构没变）
+            # (dummy forward 已经修改了状态，但模型结构没变)
     else:
         if IS_WINDOWS:
             print(f"[Optimize] Skipping torch.compile on Windows")
@@ -365,7 +365,7 @@ def create_model(method: str, num_labels: int, pad_token_id: int):
     return model
 
 
-# ========================= 训练引擎（梯度累积版）========================
+# ========================= 训练引擎(梯度累积版)========================
 def train_epoch(
     model, 
     train_loader, 
@@ -399,7 +399,7 @@ def train_epoch(
             outputs = model(**batch)
             loss = outputs.loss / TRAIN_CFG.grad_accum_steps  # 梯度累积：loss 缩放
         
-        # Aeloru 正交惩罚（只在实际 step 时加，避免累积干扰）
+        # Aeloru 正交惩罚(只在实际 step 时加，避免累积干扰)
         if aeloru_layers and batch_idx % TRAIN_CFG.grad_accum_steps == 0:
             with torch.no_grad():
                 ortho_loss = sum(
@@ -410,7 +410,7 @@ def train_epoch(
         # 反向
         scaler.scale(loss).backward() if scaler else loss.backward()
         
-        # 记录时间（不含梯度裁剪/优化器，因为不是每步都做）
+        # 记录时间(不含梯度裁剪/优化器，因为不是每步都做)
         t1 = time.perf_counter()
         step_times.append(t1 - t0)
         
@@ -437,7 +437,7 @@ def train_epoch(
             if relora_trainer:
                 relora_trainer.maybe_merge_and_reinit(batch_idx // TRAIN_CFG.grad_accum_steps)
             
-            # Aeloru post_step_update（只在真正优化器步后执行）
+            # Aeloru post_step_update(只在真正优化器步后执行)
             if aeloru_layers and need_hook:
                 for layer in aeloru_layers:
                     lid = id(layer)
@@ -453,7 +453,7 @@ def train_epoch(
         num_batches += 1
         global_samples += batch["input_ids"].size(0)
         
-        # 低频率更新进度条（减少 CUDA 同步）
+        # 低频率更新进度条(减少 CUDA 同步)
         if (batch_idx + 1) % TRAIN_CFG.log_interval == 0:
             avg_step_ms = np.mean(step_times[-TRAIN_CFG.log_interval:]) * 1000
             throughput = (TRAIN_CFG.log_interval * TRAIN_CFG.batch_size * TRAIN_CFG.grad_accum_steps) / sum(step_times[-TRAIN_CFG.log_interval:])
@@ -472,7 +472,7 @@ def train_epoch(
     return avg_loss, avg_step_ms, peak_mem
 
 
-# ========================= 评估引擎（流式、不囤积 GPU）========================
+# ========================= 评估引擎(流式、不囤积 GPU)========================
 @torch.no_grad()
 def evaluate(model, eval_loader):
     model.eval()
@@ -514,7 +514,7 @@ def train_and_evaluate(method: str, dataset_cfg: Dict, tokenizer, pad_token_id: 
     val_key = "validation_matched" if dataset_cfg["config"] == "mnli" else "validation"
     eval_loader = DataLoader(
         encoded[val_key],
-        batch_size=TRAIN_CFG.batch_size * 2,  # 评估可以用更大 batch（无梯度）
+        batch_size=TRAIN_CFG.batch_size * 2,  # 评估可以用更大 batch(无梯度)
         collate_fn=collator,
         num_workers=TRAIN_CFG.num_workers,
         pin_memory=TRAIN_CFG.pin_memory,
@@ -522,7 +522,7 @@ def train_and_evaluate(method: str, dataset_cfg: Dict, tokenizer, pad_token_id: 
 
     model = create_model(method, dataset_cfg["num_labels"], pad_token_id)
     
-    # 优化器：fused AdamW（比 8bit 更稳定，速度相当）
+    # 优化器：fused AdamW(比 8bit 更稳定，速度相当)
     trainable = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.AdamW(
         trainable, lr=TRAIN_CFG.lr, weight_decay=TRAIN_CFG.weight_decay, fused=True
@@ -535,7 +535,7 @@ def train_and_evaluate(method: str, dataset_cfg: Dict, tokenizer, pad_token_id: 
         num_training_steps=total_steps
     )
     
-    # 梯度缩放器（bf16 不需要，但保留接口）
+    # 梯度缩放器(bf16 不需要，但保留接口)
     scaler = torch.cuda.amp.GradScaler() if AMP_DTYPE == torch.float16 else None
 
     # ReLoRA

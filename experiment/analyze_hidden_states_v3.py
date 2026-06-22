@@ -19,7 +19,7 @@ EXPERIMENT_NAME = "hidden_states_analysis_v3"
 
 
 
-# 扩充后的样本（每类20句）
+# 扩充后的样本(每类20句)
 with open("AeloRu\\experiment\\tool\\SENTENCES_V3.json", "r") as f:
     SENTENCES_V3 = json.load(f)
 

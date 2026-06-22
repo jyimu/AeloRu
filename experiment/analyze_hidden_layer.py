@@ -50,7 +50,7 @@ def main():
                 print(f"  Vector norm: {vec.norm().item():.2f}")
                 
                 # 简单分析：与哪些概念词最相关
-                # （需要预定义概念向量，这里简化）
+                # (需要预定义概念向量，这里简化)
     
     # 更好的方法：直接分析 Attention 层的 W_q, W_k, W_v
     print("\n" + "="*60)
@@ -68,7 +68,7 @@ def main():
     
     print(f"\nTop 10 singular values: {S[:10].tolist()}")
     
-    # 关键：分析 V 的向量（输入空间）
+    # 关键：分析 V 的向量(输入空间)
     # 但 hidden_dim=896，无法直接解码为 token
     
     # 替代：用 lm_head 投影回 vocab 空间
@@ -143,7 +143,7 @@ def main():
                 print(f"  Vector norm: {vec.norm().item():.2f}")
                 
                 # 简单分析：与哪些概念词最相关
-                # （需要预定义概念向量，这里简化）
+                # (需要预定义概念向量，这里简化)
     
     # 更好的方法：直接分析 Attention 层的 W_q, W_k, W_v
     print("\n" + "="*60)
@@ -161,7 +161,7 @@ def main():
     
     print(f"\nTop 10 singular values: {S[:10].tolist()}")
     
-    # 关键：分析 V 的向量（输入空间）
+    # 关键：分析 V 的向量(输入空间)
     # 但 hidden_dim=896，无法直接解码为 token
     
     # 替代：用 lm_head 投影回 vocab 空间

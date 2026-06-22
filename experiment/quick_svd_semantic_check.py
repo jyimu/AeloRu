@@ -36,7 +36,7 @@ def main():
     print(f"Hidden size: {model.config.hidden_size}")
     print(f"Vocab size: {model.config.vocab_size}")
     
-    # 取输出层权重（lm_head）
+    # 取输出层权重(lm_head)
     # Qwen2.5结构: model.lm_head.weight
     lm_head = model.lm_head.weight  # [vocab_size, hidden_dim]
     print(f"\nLM head shape: {lm_head.shape}")
@@ -48,7 +48,7 @@ def main():
     # 使用float32避免精度问题
     lm_head_float = lm_head.float()
     
-    # 截断SVD（更快）
+    # 截断SVD(更快)
     U, S, V = torch.svd(lm_head_float)
     
     # 只分析前20个
@@ -107,7 +107,7 @@ def main():
     print("\n=== Quick Pattern Check ===")
     all_tokens = [set(r['top_tokens']) for r in results[:5]]
     
-    # 检查前5个向量是否有重叠（如果有，可能是语法词）
+    # 检查前5个向量是否有重叠(如果有，可能是语法词)
     common_tokens = set.intersection(*all_tokens)
     if common_tokens:
         print(f"Common tokens across top vectors: {common_tokens}")

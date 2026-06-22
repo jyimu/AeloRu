@@ -3,41 +3,38 @@
 Aeloru (Adaptive Elastic Learning with Orthogonal ReLoRA Units)
 ==================================================================
 
-面向消费级 GPU 的 LLM 实时训练框架，融合：
-- Hi-DoRA: 幅度-方向解耦的低秩适配
-- ReLoRA: 周期性合并重置实现累积高秩
-- Hebbian-Fisher 双向联动: 突触可塑性门控
-- Hong Wen 认知状态机: 冲突驱动的四相学习循环
-- Fisher 分层架构: 梯度高频 + 稀疏 Fisher 中频 + 全量快照低频
-- PEM 自适应侧向连接: 特征解耦与冗余抑制
-- PEM 稳态可塑性: 神经元级自适应增益防止权重爆炸
-- HGF 闭式 Fisher: 基于精度传播的闭式自然梯度
-- HGF 波动率耦合: 自动动态学习率适应概念漂移
-- DLAM 谱滤波睡眠: 最优离线记忆正则化与跨模态异联想绑定
+A Real-time LLM Training Framework for Consumer-grade GPUs, Integrating the Following Modules:
+- Hi-DoRA: Magnitude-Direction Decomposed Low-Rank Adaptation
+- ReLoRA: Cumulative High-Rank Implementation via Periodic Merging and Resetting
+- Hebbian-Fisher Bidirectional Interaction: Synaptic Plasticity Gating
+- Hong Wen Cognitive State Machine: Conflict-Driven Four-Phase Learning Cycle
+- Hierarchical Fisher Architecture: High-Frequency Gradient + Medium-Frequency Sparse Fisher + Low-Frequency Full Snapshots
+- PEM Adaptive Lateral Connections: Feature Decoupling and Redundancy Suppression
+- PEM Homeostatic Plasticity: Neuron-Level Adaptive Gain to Prevent Weight Explosion
+- HGF Closed-Form Fisher: Closed-Form Natural Gradient Based on Precision Propagation
+- HGF Volatility Coupling: Automatic Dynamic Learning Rate Adaptation to Concept Drift
+- DLAM Spectral Filtered Sleep: Optimal Offline Memory Regularization and Cross-Modal Heteroassociative Binding
 
-核心公式体系:
-1. 低秩增量: DeltaW = (alpha/r) * B @ A
-2. Hi-DoRA 调制: DeltaW' = (m_x * m_y^T) ⊙ DeltaW
-3. Fisher 门控: DeltaW'' = DeltaW' * 1/(1 + gamma*F)
-4. 能量预算: DeltaW''' = DeltaW'' * min(1, eta*||W0||_F / ||DeltaW''||_F)
-5. 有效权重: W_eff = W0 + W_acc + DeltaW'''
-6. 正交惩罚: L_ortho = lambda * ||DeltaW^T @ W0||_F^2
-7. Hebbian 更新: dA = s*eta_hebb * y_mean[:r] @ x_mean
-                 dB = s*eta_hebb * y_mean @ x_mean[:r]
+Core Formula System:
+1. Low-rank increment: DeltaW = (alpha/r) * B @ A
+2. Hi-DoRA modulation: DeltaW' = (m_x * m_y^T) ⊙ DeltaW
+3. Fisher gating: DeltaW'' = DeltaW' * 1/(1 + gamma*F)
+4. Energy budget: DeltaW''' = DeltaW'' * min(1, eta*||W0||_F / ||DeltaW''||_F)
+5. Effective weight: W_eff = W0 + W_acc + DeltaW'''
+6. Orthogonality penalty: L_ortho = lambda * ||DeltaW^T @ W0||_F^2
+7. Hebbian update: dA = s*eta_hebb * y_mean[:r] @ x_mean
+                   dB = s*eta_hebb * y_mean @ x_mean[:r]
 8. Fisher EMA: F_t = beta*F_{t-1} + (1-beta)*impact
-9. 冲突分数: C = 0.6*v_F + 0.4*(1-H)
-10. 稳态增益: g_i = 1 / (running_var_i + 1e-5)
-11. 侧向抑制: h' = h - h @ L^T,  dL/dt = eta_lat * outer(h_mean, h_mean)
-12. HGF 精度: pi = pi_pred + pi_prev * alpha^2 * (g')^2
-13. 波动率: omega += kappa * (epsilon^2 - exp(omega)), lr_eff = 1/exp(omega)
-14. DLAM 核: A(t) = (1+t) * (I + t*Sigma)^-1
+9. Conflict score: C = 0.6*v_F + 0.4*(1-H)
+10. Homeostatic gain: g_i = 1 / (running_var_i + 1e-5)
+11. Lateral inhibition: h' = h - h @ L^T,  dL/dt = eta_lat * outer(h_mean, h_mean)
+12. HGF precision: pi = pi_pred + pi_prev * alpha^2 * (g')^2
+13. Volatility: omega += kappa * (epsilon^2 - exp(omega)), lr_eff = 1/exp(omega)
+14. DLAM kernel: A(t) = (1+t) * (I + t*Sigma)^-1
 
 Author: JYIMU
 """
 
-from re import S
-
-import accelerate
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -49,23 +46,23 @@ import os
 import warnings
 
 # =============================================================================
-# 配置类
+# Config Class
 # =============================================================================
 
 class CognitiveState(Enum):
     """Hong Wen 认知状态枚举"""
-    EXPLORE = "explore"     # 自由探索期(纯 Hebbian)
-    RED = "red"             # 认知冲突(红温)
-    ANCHOR = "anchor"       # BP 过程锚定
-    SOLID = "solid"         # Hebbian 固化
+    EXPLORE = "explore"     # Free Exploration Period (Pure Hebbian)
+    RED = "red"             # Cognitive conflict (Hong Wen)
+    ANCHOR = "anchor"       # BP process anchoring
+    SOLID = "solid"         # Hebbian curing
 
 
 @dataclass
 class AeloruConfig:
     """
-    Aeloru 完整配置类(v2.0 - 整合 PEM / HGF / DLAM 理论)
-    
-    所有功能均可独立开关，便于消融实验。
+    Aeloru Complete Configuration Class (v2.0 - Integrated PEM/HGF/DLAM Theory)
+
+    All functions can be independently turned on and off, facilitating the ablation experiment.
 
     Args:
         # --- 基础维度 ---
@@ -133,8 +130,8 @@ class AeloruConfig:
 
         # --- DLAM 睡眠机制(新增)---
         use_dlam_sleep: bool = False         # 启用谱滤波睡眠
-        sleep_condition_threshold: float = 500.0  # 条件数触发阈值（提升以避免大模型频繁误触发）
-        min_steps_between_sleep: int = 1000  # 两次睡眠间最小步数（千步级，避免睡眠开销压垮训练）
+        sleep_condition_threshold: float = 100.0  # 条件数触发阈值
+        min_steps_between_sleep: int = 100   # 两次睡眠间最小步数
         cross_modal_coupling: float = 0.01   # 跨模态异联想耦合强度
         use_cross_modal_binding: bool = False  # 启用跨层异联想绑定
         dlam_replay_threshold: float = 1e-6  # 弱连接修剪阈值
@@ -199,81 +196,79 @@ class AeloruConfig:
         diagnostic_interval: int = 100       # 每 N 步才打一次诊断/verbose
         enable_cognitive_report: bool = False  # 默认关闭认知报告(避免 .item() 同步)
     """
-    # --- 基础维度 ---
+    # --- Basic dimension ---
     in_features: int = 512
     out_features: int = 512
-    r: int = 8                          # LoRA 秩
-    lora_alpha: float = 4.0             # LoRA 缩放因子
-    LoRA_lr: float = 1e-4               # LoRA 学习率
+    r: int = 8                          # LoRA Rank
+    lora_alpha: float = 4.0             # LoRA zoom factor
+    LoRA_lr: float = 1e-4               # LoRA learning rate
 
     # --- 功能总开关 ---
-    use_hidora: bool = True               # 是否启用 Hi-DoRA 幅度调制
-    use_relora: bool = True               # 是否启用 ReLoRA 合并重置
-    use_hebbian: bool = True              # 是否启用 Hebbian 在线学习
-    use_fisher: bool = True               # 是否启用 Fisher 认知掩码
-    use_hongwen: bool = True              # 是否启用 Hong Wen 状态机
-    use_orthogonal_penalty: bool = True   # 是否启用正交惩罚损失
-    use_energy_budget: bool = True        # 是否启用能量预算硬约束
-    hebbian_before_backprop: bool = False  # False=传统顺序(先BP后HB) | True=神经科学顺序(先HB后BP)
+    use_hidora: bool = True               # use Hi-DoRA amplitude modulation
+    use_relora: bool = True               # use ReLoRA merge and reset
+    use_hebbian: bool = True              # use Hebbian online learning
+    use_fisher: bool = True               # use Fisher cognitive masking
+    use_hongwen: bool = True              # use Hong Wen state machine
+    use_orthogonal_penalty: bool = True   # use orthogonal penalty loss
+    use_energy_budget: bool = True        # use energy budget hard constraint
+    hebbian_before_backprop: bool = False  # False=traditional order(first BP then HB) | True=neuroscience order(first HB then BP)
 
-    # --- PEM 自适应侧向连接(新增 §3.2)---
-    use_lateral_connection: bool = False   # 启用低秩侧向抑制
-    lateral_lr: float = 1e-5             # 侧向连接 Hebbian 学习率
-    lateral_decay: float = 0.99          # 侧向权重衰减
+    # --- PEM Adaptive Lateral Connection ---
+    use_lateral_connection: bool = False   # use low-rank lateral inhibition
+    lateral_lr: float = 1e-5             # lateral connection Hebbian learning rate
+    lateral_decay: float = 0.99          # lateral weight decay
 
-    # --- PEM 稳态可塑性(新增 §3.3)---
-    use_homeostatic_plasticity: bool = False  # 启用神经元级稳态增益
-    homeostatic_tau: float = 0.99            # 方差 EMA 时间常数
-    homeostatic_max_gain: float = 5.0        # 增益上限(防止过度抑制)
+    # --- PEM Homeostatic Plasticity ---
+    use_homeostatic_plasticity: bool = False  # use homeostatic gain
+    homeostatic_tau: float = 0.99            # volatility EMA time constant
+    homeostatic_max_gain: float = 5.0        # max gain (to prevent excessive inhibition)
 
-    # --- HGF 闭式 Fisher(新增 §2.3)---(优于传统Fisher，推荐开启)
-    use_hgf_fisher: bool = False         # 用精度传播替代梯度平方估计
-    hgf_precision_init: float = 1.0        # 初始精度
-    hgf_smoothing_alpha: float = 0.95      # HGF 递归更新平滑系数
-    hgf_normalize: bool = True             # 是否将 HGF 更新归一化量纲
+    # --- HGF Closed Form Fisher ---(Superior to traditional Fisher, recommended to be enabled)
+    use_hgf_fisher: bool = False         # use precision propagation or HGF recursive estimation
+    hgf_precision_init: float = 1.0        # initial precision
+    hgf_smoothing_alpha: float = 0.95      # HGF recursive update smoothing coefficient
+    hgf_normalize: bool = True             # whether to normalize HGF update magnitude
 
-    # --- HGF 波动率耦合(新增 §3.1)---
-    use_volatility_coupling: bool = False  # 启用自动动态学习率
-    volatility_lr: float = 1e-3            # 波动率更新速率 (kappa)
-    volatility_init: float = 0.0           # 初始 log-volatility
+    # --- HGF Volatility Coupling ---
+    use_volatility_coupling: bool = False  # use automatic volatility learning
+    volatility_lr: float = 1e-3            # volatility update rate (kappa)
+    volatility_init: float = 0.0           # initial log-volatility
 
-    # --- HGF 闭式一步更新(实验性)---
-    use_hgf_closed_form: bool = False    # 实验性：用闭式梯度替代 autograd(若开启Hebbian先于BP,需要将其开启)
-    hgf_loss_mode: str = "ce"           # "ce" (Softmax交叉熵) | "bce" (Sigmoid二分类)
-    hgf_label_smoothing: float = 0.0      # 标签平滑系数(仅CE模式)
+    # --- HGF Closed Form Update ---
+    use_hgf_closed_form: bool = False    # Experimental: Replace autograd with a closed gradient(If Hebbian is enabled before BP, it needs to be enabled)
 
-    # --- 预测性解相关 (PredictiveDecorrBSS) ---
-    use_predictive_coding: bool = False      # 启用预测编码神经动态
-    predictive_coding_rank: int = 16         # C_y 低秩因子秩
-    gamma_predictive: float = 100.0          # 预测误差项权重 (gamma)
-    lambda_lateral:float = 0.9             # 侧向连接统计更新的 EMA 衰减(lambda)
-    neural_dynamics_iterations: int = 10     # 神经动态松弛迭代次数
-    neural_lr_start: float = 0.9            # 神经动态初始步长
-    neural_lr_stop: float = 0.01            # 神经动态最小步长
-    neural_OUTPUT_COMP_TOL: float = 1e-8     # 神经动态收敛阈值
-    epsilon: float = 1e-5                    # 数值稳定常数
+    # --- Predictive solution correlation (PredictiveDecorrBSS) ---
+    use_predictive_coding: bool = False      # use predictive coding neural dynamics
+    predictive_coding_rank: int = 16         # C_y rank
+    gamma_predictive: float = 100.0          # predictive error term weight(gamma)
+    lambda_lateral:float = 0.9             # The EMA attenuation of the lateral connection statistics update(lambda)
+    neural_dynamics_iterations: int = 10     # neural dynamics relaxation iterations
+    neural_lr_start: float = 0.9            # neural dynamics initial step size
+    neural_lr_stop: float = 0.01            # neural dynamics minimum step size
+    neural_OUTPUT_COMP_TOL: float = 1e-8     # neural dynamics convergence threshold
+    epsilon: float = 1e-5                    # numerical stability constant
 
-    # --- 源信号域约束 (BSSbase) ---
-    use_source_domain_constraint: bool = False  # 启用输出域几何投影约束
-    presumed_domain: str = "nnantisparse"       # 域类型: antisparse | nnantisparse | sparse | nnsparse | simplex
+    # --- Source signal domain constraint (BSSbase) ---
+    use_source_domain_constraint: bool = False  # use output domain geometric projection constraint
+    presumed_domain: str = "nnantisparse"       # domain type: antisparse | nnantisparse | sparse | nnsparse | simplex
                                                 # antisparse: [-1, 1]
-                                                # nnantisparse/nnsparse/simplex: [0, 1], simplex 额外投影到单位单纯形
+                                                # nnantisparse/nnsparse/simplex: [0, 1], simplex additional projection to unit simplex
 
-    # --- 在线学习率与遗忘 (CorInfoMaxBSS) ---
-    use_online_covariance: bool = False      # 启用输出/输入协方差在线估计
-    use_whitening: bool = False              # 启用输入动态白化
-    whitening_interval: int = 1000           # 白化矩阵重计算间隔(步)
+    # --- Online learning rate and forgetting (CorInfoMaxBSS) ---
+    use_online_covariance: bool = False      # use output/input covariance online estimation
+    use_whitening: bool = False              # use input dynamic whitening
+    whitening_interval: int = 1000           # whitening matrix re-computation interval(steps)
 
-    # --- DLAM 睡眠机制(新增)---
-    use_dlam_sleep: bool = False         # 启用谱滤波睡眠
-    sleep_condition_threshold: float = 500.0  # 条件数触发阈值（提升以避免大模型频繁误触发）
-    min_steps_between_sleep: int = 1000  # 两次睡眠间最小步数（千步级，避免睡眠开销压垮训练）
-    cross_modal_coupling: float = 0.01   # 跨模态异联想耦合强度
-    use_cross_modal_binding: bool = False  # 启用跨层异联想绑定
-    dlam_replay_threshold: float = 1e-6  # 弱连接修剪阈值
+    # --- DLAM sleep mechanism---
+    use_dlam_sleep: bool = False         # use DLAM sleep mechanism
+    sleep_condition_threshold: float = 100.0  # condition number threshold
+    min_steps_between_sleep: int = 100   # minimum steps between sleep
+    cross_modal_coupling: float = 0.01   # cross-modal coupling strength
+    use_cross_modal_binding: bool = False  # use cross-layer cross-modal binding
+    dlam_replay_threshold: float = 1e-6  # weak connection pruning threshold
 
-    # --- Fisher 分层策略 ---
-    fisher_mode: str = "hierarchical"     # 'off': 禁用 | 'gradient_only': 只计算梯度 | 'hierarchical':部分使用Fisher,部分使用梯度(推荐) | 'full':全部使用Fisher
+    # --- Fisher hierarchical ---
+    fisher_mode: str = "hierarchical"     # 'off': forbidden | 'gradient_only': Only calculate the gradient | 'hierarchical':部分使用Fisher,部分使用梯度(推荐) | 'full':全部使用Fisher
     fisher_topk_ratio: float = 0.2        # 稀疏 Fisher 仅计算 Top-K% 参数
     fisher_compute_interval: int = 500    # 中频稀疏计算间隔(步)
     fisher_full_snapshot_interval: int = 5000  # 低频全量快照间隔(步)
@@ -659,19 +654,11 @@ class AeloruLayer(nn.Module):
             self._fisher_snapshot_q = None
             self._fisher_stream = None
         
-        # ========== Hebbian 探索痕迹（低秩分解版，供 DLAM 睡眠与 Fisher 冲突诊断）==========
-        # 原全尺寸 hebbian_trace (out_features, in_features) 在大模型上会导致 SVD/求逆爆炸。
-        # 改为低秩因子 B_trace (out_features, r) 与 A_trace (r, in_features)，
-        # 所有谱滤波运算仅在 r 维空间进行，计算复杂度从 O(d^3) 降至 O(r^3)。
-        if cfg.use_hebbian or cfg.use_fisher or cfg.use_dlam_sleep:
-            self.register_buffer('hebb_trace_B', torch.zeros(self.out_features, cfg.r, dtype=self.cfg.AMP_DTYPE))
-            self.register_buffer('hebb_trace_A', torch.zeros(cfg.r, self.in_features, dtype=self.cfg.AMP_DTYPE))
+        # ========== Hebbian 探索痕迹 ==========
+        if cfg.use_hebbian or cfg.use_fisher:
+            self.register_buffer('hebbian_trace', torch.zeros(self.out_features, self.in_features))
         else:
-            self.hebb_trace_B = None
-            self.hebb_trace_A = None
-        # 保留旧名引用，兼容外部代码读取；实际底层为低秩因子
-        self.hebbian_trace = None
-
+            self.hebbian_trace = None
         
         # ========== Hebbian 累积缓冲 ==========
         if cfg.use_hebbian:
@@ -875,7 +862,6 @@ class AeloruLayer(nn.Module):
 
             W0 = W0.clone().detach().to(device=target_device, dtype=target_dtype, non_blocking=True)
             self.W0.copy_(W0)
-            self.original_weight = W0  # 存储原始权重引用，供注入校验使用
             if bias is not None:
                 self.bias.copy_(bias.to(device=target_device, dtype=target_dtype, non_blocking=True))
             else:
@@ -1078,24 +1064,12 @@ class AeloruLayer(nn.Module):
             return y
         
         with torch.no_grad():
-            # print(f"Input x shape: {x.shape}")  # 调试：打印输入形状
-            # try:
-                # print(f"Lateral weights shape: {self.lateral_weights.shape}")  # 调试：打印权重形状
-            # except:
-                # print(self.lateral_weights)
-                
             # 基座预测：W0 + W_acc 代表"已有知识"的预测
             W_base = self.W0 + self._get_W_acc()
             yke = F.linear(x, W_base)  # (batch, out_features)
             
             # 提取 C_y 的对角(方差)
-            # 确保 C_y_U 的形状为 (out_features, rank)，有时从检查点或外部操作中可能被意外转置
-            CU = self.C_y_U
-            if CU is None:
-                return y
-            if CU.dim() == 2 and CU.shape[0] != y.shape[-1] and CU.shape[1] == y.shape[-1]:
-                CU = CU.t()
-            diag_U = torch.sum(CU * CU, dim=1,dtype=self.cfg.AMP_DTYPE)
+            diag_U = torch.sum(self.C_y_U * self.C_y_U, dim=1)
             D_y = self.C_y_diag + diag_U + self.cfg.epsilon  # (out_features,)
             
             y_current = y.clone()
@@ -1126,17 +1100,9 @@ class AeloruLayer(nn.Module):
                     y_bar_norm = y_bar_norm.view(-1, y_bar_norm.shape[-1])
                     y_bar = y_bar.view(-1, y_bar.shape[-1])
 
-                # 使用修正后的 CU，确保矩阵乘法维度正确
-                y_proj = torch.mm(y_bar_norm, CU)  # (batch_or_1, rank)
-                y_uu = torch.mm(y_proj, CU.t())  # (batch_or_1, out_features)
-                # 冗余保护：若低秩乘法导致维度不匹配（来自意外的 CU 形状或广播问题），
-                # 则退回到显式构造 C_y_full = CU @ CU.t() 来保证 (batch, out_features)
-                if y_uu.shape[-1] != y_current.shape[-1]:
-                    C_y_full = torch.matmul(CU, CU.t())
-                    y_uu = torch.matmul(y_bar_norm, C_y_full)
+                y_proj = torch.mm(y_bar_norm, self.C_y_U)  # (batch_or_1, rank)
+                y_uu = torch.mm(y_proj, self.C_y_U.t())  # (batch_or_1, out_features)
                 lateral = (y_uu - y_bar_norm * diag_U.unsqueeze(0) - y_bar) / (D_y.unsqueeze(0) + self.cfg.epsilon)
-                if lateral.shape != y_current.shape:
-                    lateral = lateral.view(y_current.shape)
                 
                 # 3. 总梯度 = 预测误差 + 侧向抑制
                 grady = self.cfg.gamma_predictive * error + lateral  # (batch, out_features)
@@ -1322,17 +1288,14 @@ class AeloruLayer(nn.Module):
                 with torch.no_grad():
                     # 基于当前批次的神经元输出方差
                     if y.numel() > 0:
-                        # 1. 计算批次方差并压缩为通道级 [out_features]
+                        # 计算批次方差并压缩为通道级 [out_features]
                         # y 可能是 (batch, out_features) 或 (batch, seq_len, out_features) 等，
                         # 需要对所有非输出维度求平均，以匹配 running_var 的 (out_features,) 形状。
                         reduce_dims = tuple(range(y.dim() - 1))
-                        batch_var = (y ** 2).mean(dim=reduce_dims).float()
-
-                        # 2. 确保 homeostatic_tau 是标量（关键防御）
-                        tau = float(self.cfg.homeostatic_tau)  # 强制转标量
-
-                        # 3. 非原地更新（形状安全）
-                        self.running_var = self.running_var * tau + batch_var * (1 - tau)
+                        batch_var = (y ** 2).mean(dim=reduce_dims).float()  # (out_features,)
+                        self.running_var.mul_(self.cfg.homeostatic_tau).add_(
+                            batch_var * (1 - self.cfg.homeostatic_tau)
+                        )
             # 应用稳态增益(训练/评估都应用，保持输出分布稳定)
             homeostatic_gain = 1.0 / (self.running_var + 1e-5)
             homeostatic_gain = homeostatic_gain.clamp(max=self.cfg.homeostatic_max_gain)
@@ -1760,12 +1723,9 @@ class AeloruLayer(nn.Module):
                 self.fisher_mask.copy_(new_fisher)
                 self._fisher_dirty = True
 
-                if self.hebb_trace_B is not None and self.hebb_trace_A is not None:
-                    # 低秩累积：H_trace ≈ B_trace @ A_trace，避免构造全尺寸矩阵
-                    new_trace_B = self.hebb_trace_B + self._hebbian_acc_B.abs()
-                    new_trace_A = self.hebb_trace_A + self._hebbian_acc_A.abs()
-                    self.hebb_trace_B.copy_(new_trace_B)
-                    self.hebb_trace_A.copy_(new_trace_A)
+                if self.hebbian_trace is not None:
+                    new_trace = self.hebbian_trace + torch.mm(self._hebbian_acc_B.abs(), self._hebbian_acc_A.abs())
+                    self.hebbian_trace.copy_(new_trace)
 
                 # 【HGF】若启用闭式 Fisher，用 HGF 递归更新替代传统 EMA
                 if self.cfg.use_hgf_fisher:
@@ -1922,21 +1882,20 @@ class AeloruLayer(nn.Module):
             return False
         if self.step_counter - self._last_sleep_step < self.cfg.min_steps_between_sleep:
             return False
-        # 前置防御：存储模式不足时避免初期误触发
-        if self.stored_patterns is not None and self.stored_patterns.item() < 10:
-            return False
-        if self.hebb_trace_A is None or self.hebb_trace_B is None:
-            return False
-        if self.hebb_trace_A.numel() == 0 or self.hebb_trace_B.numel() == 0:
+        if self.hebbian_trace is None or self.hebbian_trace.numel() == 0:
             return False
         
         with torch.no_grad():
-            # 在 r 维低秩子空间计算条件数，避免全尺寸 SVD 爆炸
-            # Sigma = A_trace @ A_trace^T  (r, r)
-            Sigma = self.hebb_trace_A @ self.hebb_trace_A.T
+            # 计算 Hebbian 痕迹的条件数(最大奇异值/最小奇异值)
+            non_zero_mask = torch.abs(self.hebbian_trace) > self.cfg.dlam_replay_threshold
+            active_neurons = non_zero_mask.any(dim=0)
+            if active_neurons.sum() < 2: # 条件数定义需要至少两个活跃神经元
+                return False
+            
+            active_trace = self.hebbian_trace[:, active_neurons]
             try:
-                eigvals = torch.linalg.eigvalsh(Sigma)
-                condition_number = eigvals[-1] / (eigvals[0] + 1e-8)
+                S = torch.linalg.svdvals(active_trace)
+                condition_number = S[0] / (S[-1] + 1e-8)
             except RuntimeError:
                 return False
             
@@ -1948,7 +1907,7 @@ class AeloruLayer(nn.Module):
             if self.cfg.verbose and self.step_counter % self.cfg.diagnostic_interval == 0:
                 print(f"  [Aeloru] Sleep Check @ step {self.step_counter}, "
                       f"Condition Number: {condition_number:.2f}, "
-                      f"Low-rank dim r={self.cfg.r}")
+                      f"Active Neurons: {active_neurons.sum().item()}")
             return condition_number > self.cfg.sleep_condition_threshold
     
     def _offline_replay(self):
@@ -1961,59 +1920,57 @@ class AeloruLayer(nn.Module):
         A(t) = (1+t) * (I + t*Sigma)^-1
         hebbian_trace <- hebbian_trace @ A(t)
         """
-        if not self.cfg.use_dlam_sleep or self.hebb_trace_A is None or self.hebb_trace_B is None:
+        if not self.cfg.use_dlam_sleep or self.hebbian_trace is None:
             return
         
         with torch.no_grad():
-            if self.hebb_trace_A.numel() == 0 or self.hebb_trace_B.numel() == 0:
+            if self.hebbian_trace.numel() == 0:
                 return
             
-            # 步骤1：在 r 维低秩子空间计算经验协方差 Sigma = A_trace @ A_trace^T / N
-            # 原全尺寸 Sigma=(in,in) 太大；低秩子空间只需求 r×r 矩阵的逆
-            out_dim = max(self.hebb_trace_B.shape[0], 1)
-            Sigma = self.hebb_trace_A @ self.hebb_trace_A.T / out_dim
+            # 步骤1：计算经验相关矩阵 Sigma(仅活跃神经元)
+            non_zero_mask = torch.abs(self.hebbian_trace) > self.cfg.dlam_replay_threshold
+            active_neurons = non_zero_mask.any(dim=0)
+            if not active_neurons.any():
+                return
+            
+            active_trace = self.hebbian_trace[:, active_neurons]
+            Sigma = active_trace.T @ active_trace / max(active_trace.shape[0], 1)
             
             # 步骤2：计算最优睡眠时长 t*(论文第4.3节)
-            # alpha = 存储模式数 / 低秩维度 r
-            r_dim = self.cfg.r
+            # t* = 1/alpha，其中alpha是存储负载(已存储模式数 / 神经元数)
+            hidden_size = active_neurons.sum().item()
             stored = self.stored_patterns.item() if self.stored_patterns is not None else 0
-            alpha_load = stored / max(r_dim, 1)
+            alpha_load = stored / max(hidden_size, 1)
             t_opt = 1.0 / alpha_load if alpha_load > 1e-3 else 100.0
             t_opt = max(0.1, min(t_opt, 100.0))  # 限制在合理范围
             
-            # 步骤3：应用 DLAM 做梦核函数 A(t) = (1+t)(I + t*Sigma)^-1，仅在 r 维
-            I = torch.eye(r_dim, device=Sigma.device, dtype=Sigma.dtype)
+            # 步骤3：应用 DLAM 做梦核函数 A(t) = (1+t)(I + t*Sigma)^-1
+            I = torch.eye(Sigma.shape[0], device=Sigma.device, dtype=Sigma.dtype)
             try:
                 A_kernel = (1 + t_opt) * torch.inverse(I + t_opt * Sigma)
             except RuntimeError:
                 # 若矩阵奇异，使用伪逆
                 A_kernel = (1 + t_opt) * torch.linalg.pinv(I + t_opt * Sigma)
             
-            # 步骤4：用谱滤波后的低秩 A_trace 更新 Hebbian 痕迹
-            # H <- H @ A(t) 等价于 A_trace <- A_kernel @ A_trace
-            filtered_A = A_kernel @ self.hebb_trace_A
-            self.hebb_trace_A.copy_(filtered_A)
+            # 步骤4：用谱滤波后的矩阵更新 Hebbian 痕迹
+            filtered_trace = active_trace @ A_kernel
+            self.hebbian_trace[:, active_neurons] = filtered_trace
             
             # 步骤5：同步更新 Fisher 掩码(论文第5.2节的协同机制)
-            # 需要重构全尺寸影响以更新 Fisher；但只在睡眠时做一次，非每步开销
+            # Fisher 掩码应该与 Hebbian 痕迹的强度成正比
             if self.cfg.use_fisher and self.fisher_mask is not None:
-                filtered_full = self.hebb_trace_B @ filtered_A
-                trace_norm = torch.abs(filtered_full)
+                trace_norm = torch.abs(filtered_trace)
                 max_val = trace_norm.max()
                 if max_val > 1e-10:
                     fisher_sync = trace_norm / max_val
-                    self.fisher_mask.copy_(fisher_sync.to(self.fisher_mask.dtype))
+                    self.fisher_mask[:, active_neurons] = fisher_sync.to(self.fisher_mask.dtype)
                     self._fisher_dirty = True
             
-            # 步骤6：弱连接修剪（低秩阈值：B 或 A 中任意因子过小则置零）
-            weak_mask_B = self.hebb_trace_B.abs() < self.cfg.dlam_replay_threshold
-            weak_mask_A = self.hebb_trace_A.abs() < self.cfg.dlam_replay_threshold
-            self.hebb_trace_B[weak_mask_B] = 0.0
-            self.hebb_trace_A[weak_mask_A] = 0.0
+            # 步骤6：弱连接修剪(保留与论文一致的阈值)
+            weak_mask = torch.abs(self.hebbian_trace) < self.cfg.dlam_replay_threshold
+            self.hebbian_trace[weak_mask] = 0.0
             if self.cfg.use_fisher and self.fisher_mask is not None:
-                # 重构全尺寸弱连接掩码，确保与 fisher_mask 形状一致
-                weak_mask_full = weak_mask_B[:, :self.cfg.r] @ weak_mask_A[:self.cfg.r, :]
-                self.fisher_mask[weak_mask_full] = 0.0
+                self.fisher_mask[weak_mask] = 0.0
                 self._fisher_dirty = True
             
             # 步骤7：重置冲突分数，为下一个清醒周期做准备
@@ -2026,7 +1983,7 @@ class AeloruLayer(nn.Module):
             if self.cfg.verbose:
                 cond_value = self.conflict_score.item() if isinstance(self.conflict_score, torch.Tensor) else self.conflict_score
                 print(f"  [Aeloru] DLAM SLEEP @ step {self.step_counter}, "
-                      f"t_opt={t_opt:.2f}, active_r={r_dim}, cond={cond_value:.1f}")
+                      f"t_opt={t_opt:.2f}, active={hidden_size}, cond={cond_value:.1f}")
     
     def _cross_modal_binding(self, other_layers: List['AeloruLayer']):
         """
@@ -2046,27 +2003,23 @@ class AeloruLayer(nn.Module):
         """
         if not self.cfg.use_dlam_sleep or not self.cfg.use_cross_modal_binding:
             return
-        if self.hebb_trace_A is None or self.hebb_trace_B is None:
+        if self.hebbian_trace is None:
             return
         
         with torch.no_grad():
             for other in other_layers:
-                if other is self or other.hebb_trace_A is None or other.hebb_trace_B is None:
+                if other is self or other.hebbian_trace is None:
                     continue
                 
-                # 低秩跨模态绑定：在 r 维子空间计算相关性，避免全尺寸矩阵乘积
-                # C_ij = A_i @ A_j^T / r，维度 (r, r)
-                cross_corr = self.hebb_trace_A @ other.hebb_trace_A.T / max(self.cfg.r, 1)
+                # 计算两层之间的交叉相关矩阵
+                cross_corr = self.hebbian_trace.T @ other.hebbian_trace / max(self.hebbian_trace.shape[0], 1)
                 
-                # 应用异联想耦合（论文公式5的低秩简化版）
+                # 应用异联想耦合(论文公式5的简化版)
                 coupling = self.cfg.cross_modal_coupling
                 
-                # 双向耦合：A 侧子空间互相增强
-                self_A_new = self.hebb_trace_A + coupling * cross_corr @ other.hebb_trace_A
-                other_A_new = other.hebb_trace_A + coupling * cross_corr.T @ self.hebb_trace_A
-                self.hebb_trace_A.copy_(self_A_new)
-                other.hebb_trace_A.copy_(other_A_new)
-
+                # 互相增强(双向耦合)
+                self.hebbian_trace.add_(cross_corr.T @ other.hebbian_trace, alpha=coupling)
+                other.hebbian_trace.add_(cross_corr @ self.hebbian_trace, alpha=coupling)
 
     
     # =================================================================
@@ -2237,10 +2190,7 @@ class AeloruLayer(nn.Module):
         if snapshot is None:
             return 0.0
         fisher_velocity = (self.fisher_mask.float() - snapshot.float()).abs().mean()
-        if self.hebb_trace_B is not None and self.hebb_trace_A is not None:
-            trace_flat = (self.hebb_trace_B @ self.hebb_trace_A).view(-1)
-        else:
-            trace_flat = torch.zeros(1, device=self.fisher_mask.device)
+        trace_flat = self.hebbian_trace.view(-1)
         trace_sum = trace_flat.sum() + 1e-10
         nonzero_mask = trace_flat > 1e-8
         if nonzero_mask.sum() > 0:
@@ -2336,11 +2286,8 @@ class AeloruLayer(nn.Module):
             self.step_counter = 0
             self._explore_start_step = 0  # 重置探索起点
 
-            if self.hebb_trace_B is not None:
-                self.hebb_trace_B.mul_(0.5)
-            if self.hebb_trace_A is not None:
-                self.hebb_trace_A.mul_(0.5)
-
+            if self.hebbian_trace is not None:
+                self.hebbian_trace.mul_(0.5)
 
             # 新增：标记下一轮需要清理 optimizer state
             self._pending_optimizer_reset = True
@@ -2359,298 +2306,122 @@ class AeloruLayer(nn.Module):
             self.merge_and_reset()
     
     # =================================================================
-    # HGF 闭式梯度核心：CE/BCE 公式映射 (参考 HGF_CE.md)
+    # HGF 闭式一步更新(实验性：替代 autograd)
     # =================================================================
-    # 
-    # 模型结构(低秩适配器)：
-    #   x → h = x @ A^T → h' = ReLU(h) → z = h' @ B^T · (α/r) → y = y_base + z
-    # 
-    # 统一公式(HGF_CE.md §七)：
-    #   δ = activation(z) - y_target
-    #   grad_B = δ^T · h' · (α/r)
-    #   grad_A = [(δ · B) ⊙ 1_{h>0}]^T · x · (α/r)
-    #
-    # 损失模式映射(HGF_CE.md §七 对照表)：
-    #   MSE:  activation(z) = z(恒等)，         y_target: float
-    #   CE:   activation(z) = softmax(z)，        y_target: Long 或 one-hot
-    #   BCE:  activation(z) = sigmoid(z) = σ(z)， y_target: [0,1] float
-    #
-    # 工程约定(HGF_CE.md §四、§五)：
-    #   δ 采用 sum-gradient(不除以 N)，batch 尺度由 lr 吸收
-    #   Loss 值使用 mean 以与 PyTorch 默认行为一致
-    # =================================================================
-    
-    def _hgf_forward_pass(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, float]:
-        """
-        HGF 闭式前向传播：复现 forward 逻辑但保存所有中间量。
-        
-        对应 HGF_CE.md §一 模型结构：
-        x → h = x @ A^T → h' = ReLU(h) → z = h' @ B^T · (α/r) → y = y_base + z
-        
-        侧向抑制(HGF_CE.md 未涉及，但 aeloru 通用)：
-        h ← h - h @ L^T  (在 r 维特征空间施加竞争抑制)
-        
-        Args:
-            x: 输入张量 (batch, in_features)
-        
-        Returns:
-            h: 线性投影特征 (batch, r)，ReLU 之前
-            h_relu: 激活特征 (batch, r)，ReLU 之后
-            y_pred: 完整前向输出 z + y_base (batch, out_features)
-            effective_B: 经 Hi-DoRA 调制后的 B 矩阵 (out_features, r)，用于梯度反向映射
-            scale: LoRA 缩放因子 α/r
-        """
-        h = F.linear(x, self.lora_A)  # (batch, r)
-        
-        # 侧向抑制(在 r 维特征空间)
-        if self.cfg.use_lateral_connection and self.lateral_weights is not None:
-            h = h - F.linear(h, self.lateral_weights)
-        
-        h_relu = F.relu(h)
-        
-        # 输出投影：可选 Hi-DoRA 调制
-        if self.cfg.use_hidora and self.m_x is not None and self.m_y is not None:
-            effective_B = self.lora_B * self.m_x.unsqueeze(1)
-            z = F.linear(h_relu, effective_B)
-        else:
-            effective_B = self.lora_B
-            z = F.linear(h_relu, effective_B)
-        
-        scale = self.cfg.lora_alpha / self.cfg.r
-        z = z * scale
-        
-        # 加上冻结基座输出 y_base = x @ (W0 + W_acc)^T + bias
-        y_base = F.linear(x, self.W0, self.bias)
-        if self.cfg.use_relora:
-            y_base = y_base + F.linear(x, self._get_W_acc())
-        y_pred = z + y_base
-        
-        return h, h_relu, y_pred, effective_B, scale
-    
-    def _compute_hgf_delta(
-        self, y_pred: torch.Tensor, y_target: torch.Tensor, loss_mode: str
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        计算 HGF 闭式 δ = ∂L/∂z(HGF_CE.md §四、§五)。
-        
-        统一结构(HGF_CE.md §七 公式框)：
-            δ = activation(z) - y_target
-        
-        具体模式：
-        - CE (HGF_CE.md §四):
-            p = softmax(z),  L_CE = -1/N Σ y · log(p)  (mean 形式)
-            δ_CE = p - y_target  (sum-gradient，不除以 N)
-        
-        - BCE (HGF_CE.md §五):
-            p = σ(z),  L_BCE = -1/N Σ [y log(p) + (1-y) log(1-p)]  (mean 形式)
-            δ_BCE = p - y_target  (sum-gradient，不除以 N)
-        
-        Args:
-            y_pred: 模型输出 logits (batch, C)
-            y_target: 目标标签
-                - CE 模式: (batch,) Long 类别索引，或 (batch, C) one-hot/概率分布
-                - BCE 模式: (batch, C) float，值域 [0, 1]
-            loss_mode: "ce" | "bce"
-        
-        Returns:
-            delta: sum-gradient 形式的误差项 δ (batch, C)，shape 与 y_pred 一致
-            loss: 标量损失值(mean 形式)
-        """
-        loss_mode = loss_mode.lower()
-        
-        if loss_mode == "ce":
-            if y_target.dtype == torch.long:
-                # Long 索引模式：使用标准 CE 损失
-                loss = F.cross_entropy(y_pred, y_target)
-                probs = F.softmax(y_pred, dim=-1)
-                y_onehot = F.one_hot(y_target, num_classes=y_pred.size(-1)).to(probs.dtype)
-                delta = probs - y_onehot
-            else:
-                # 概率分布 / one-hot 模式：手动计算 CE
-                target = y_target.to(y_pred.dtype)
-                # 守卫：若目标包含负值或非概率分布（如 randn() 生成的非法目标），
-                # 先 softmax 归一化为有效概率分布，保证 CE 损失的非负性
-                if target.min() < 0 or not torch.allclose(
-                    target.sum(dim=-1), torch.ones(1, device=target.device), atol=1e-6
-                ):
-                    target = F.softmax(target, dim=-1)
-                probs = F.softmax(y_pred, dim=-1)
-                probs = probs.clamp(min=1e-7, max=1.0)
-                loss = -(target * torch.log(probs)).sum(dim=-1).mean()
-                delta = probs - target
-            
-            # 标签平滑(HGF_CE.md §四：工程约定，可选)
-            if getattr(self.cfg, 'hgf_label_smoothing', 0.0) > 0.0:
-                eps = self.cfg.hgf_label_smoothing
-                num_classes = y_pred.size(-1)
-                if y_target.dtype == torch.long:
-                    smoothed_target = torch.zeros_like(probs).scatter_(
-                        -1, y_target.unsqueeze(-1), 1.0
-                    ) * (1.0 - eps) + eps / num_classes
-                    delta = probs - smoothed_target
-                else:
-                    smoothed_target = target * (1.0 - eps) + eps / num_classes
-                    delta = probs - smoothed_target
-        
-        elif loss_mode == "bce":
-            target = y_target.float().to(y_pred.dtype)
-            loss = F.binary_cross_entropy_with_logits(y_pred, target)
-            probs = torch.sigmoid(y_pred)
-            delta = probs - target
-        
-        else:
-            raise ValueError(f"不支持的 loss_mode: {loss_mode}，仅支持 'ce' 或 'bce'")
-        
-        return delta, loss
-    
-    def _compute_hgf_closed_grads(
-        self,
-        delta: torch.Tensor,
-        h: torch.Tensor,
-        h_relu: torch.Tensor,
-        x: torch.Tensor,
-        effective_B: torch.Tensor,
-        scale: float
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        计算 HGF 闭式梯度(HGF_CE.md §七 统一公式)。
-        
-        核心公式(与损失函数无关，只依赖 δ)：
-            grad_B = δ^T · h' · (α/r)           [HGF_CE.md 公式框第 2 行]
-            grad_A = [(δ · B) ⊙ 1_{h>0}]^T · x · (α/r)  [HGF_CE.md 公式框第 3 行]
-        
-        推导过程(HGF_CE.md §二 核心洞察)：
-            z = h' @ B^T · (α/r)
-            ∂L/∂B = (α/r) · δ^T @ h'     [外层梯度 δ，内层 h']
-            ∂L/∂h' = (α/r) · δ @ B       [反向传播到 h']
-            ∂L/∂h = ∂L/∂h' ⊙ 1_{h>0}     [ReLU 导数]
-            ∂L/∂A = ∂L/∂h^T @ x          [返回到 A]
-        
-        Args:
-            delta: 误差项 δ = activation(z) - y_target (batch, C)
-            h: ReLU 前特征 (batch, r)
-            h_relu: ReLU 后特征 h' (batch, r)
-            x: 输入 (batch, in_features)
-            effective_B: 经 Hi-DoRA 调制的 B 矩阵 (out_features, r)，或原始 lora_B
-            scale: LoRA 缩放因子 α/r
-        
-        Returns:
-            grad_A: ∂L/∂A (r, in_features)
-            grad_B: ∂L/∂B (out_features, r)
-        """
-        # grad_B = δ^T · h' · (α/r)   —— HGF_CE.md 统一公式第 2 行
-        grad_B = torch.mm(delta.t(), h_relu) * scale
-        
-        # grad_A = [(δ · B) ⊙ 1_{h>0}]^T · x · (α/r)   —— HGF_CE.md 统一公式第 3 行
-        # 步骤 1: δ_dot_B = δ · B  [反向传播到 h' 空间]
-        # 步骤 2: ReLU 导数 mask = 1_{h>0}
-        # 步骤 3: grad_h = (δ · B) ⊙ 1_{h>0} · (α/r)
-        # 步骤 4: grad_A = grad_h^T · x
-        grad_h = torch.mm(delta, effective_B) * (h > 0).float() * scale
-        grad_h = grad_h.to(self.cfg.AMP_DTYPE)
-        grad_A = torch.mm(grad_h.t(), x)
-        
-        return grad_A, grad_B
-    
-    def _apply_hgf_parameter_update(
-        self, grad_A: torch.Tensor, grad_B: torch.Tensor, lr: float
-    ):
-        """
-        应用 HGF 闭式梯度更新到低秩适配器参数和 Hi-DoRA 幅度向量。
-        
-        更新的参数：
-        - lora_A, lora_B：使用闭式梯度进行 SGD 下降
-        - m_x, m_y：Hi-DoRA 幅度向量的同步更新(基于梯度范数)
-        - 记录参数更新幅度到 _hgf_delta_buffer，用于冲突检测
-        
-        Args:
-            grad_A: ∂L/∂A (r, in_features)
-            grad_B: ∂L/∂B (out_features, r)
-            lr: 有效学习率(含波动率调制)
-        """
-        # LoRA 参数更新：SGD 下降
-        self.lora_B.data.sub_(lr * grad_B)
-        self.lora_A.data.sub_(lr * grad_A)
-        
-        # 记录参数更新幅度(用于 HGF 冲突检测回退)
-        delta_norm = (lr * grad_B).norm().item() + (lr * grad_A).norm().item()
-        self._append_hgf_delta(delta_norm)
-        
-        # Hi-DoRA 幅度向量同步更新(基于梯度范数的比例缩放)
-        if self.cfg.use_hidora and self.m_x is not None and self.m_y is not None:
-            self.m_x.data.sub_(lr * grad_B.norm(dim=1) * 1e-3)
-            self.m_y.data.sub_(lr * grad_A.norm(dim=0) * 1e-3)
     
     def hgf_closed_form_update(self, x: torch.Tensor, y_target: torch.Tensor, loss_mode: str = "ce") -> torch.Tensor:
         """
-        HGF 闭式一步更新(实验性功能，参考 HGF_CE.md 完整推导)。
-        
-        该实现严格遵循 HGF_CE.md 的数学推导，将损失函数从 MSE 替换为
-        Softmax 交叉熵(CE)或 Sigmoid BCE，同时保持闭式梯度更新。
-        
-        核心洞察(HGF_CE.md §二)：
-            损失函数的差异仅体现在输出层对 logits 的局部梯度
-            δ = ∂L/∂z，低秩适配器内部的反向传播链完全不变。
-        
-        流水线(对应 HGF_CE.md §四/§五 推导结构)：
-        1. _hgf_forward_pass(x)         → h, h_relu, y_pred, effective_B, scale
-        2. _compute_hgf_delta(...)      → δ = activation(z) - y_target, loss
-        3. _compute_hgf_closed_grads(...) → grad_A, grad_B
-        4. _apply_hgf_parameter_update(...) → 更新 lora_A/B/m_x/m_y
-        
-        统一公式(HGF_CE.md §七)：
-            δ = activation(z) - y_target
-            grad_B = δ^T · h' · (α/r)
-            grad_A = [(δ · B) ⊙ 1_{h>0}]^T · x · (α/r)
-        
-        其中 δ 采用 sum-gradient 形式(不除以 N)，batch 尺度由 lr 吸收。
-        Loss 值使用 mean 以与 PyTorch 默认行为一致。
-        
-        | 损失模式 | activation(z)       | y_target 格式           |
-        |:---------|:--------------------|:------------------------|
-        | MSE      | z(恒等)           | float                   |
-        | CE       | softmax(z)          | Long 索引 或 one-hot    |
-        | BCE      | σ(z)                | [0,1] float             |
-        
+        HGF 闭式一步更新(实验性功能)。
+
+        该实现统一基于“δ = ∂L/∂z”的形态：
+        - CE/Softmax: δ = softmax(z) - y
+        - BCE/Sigmoid: δ = sigmoid(z) - y
+
+        这里 delta 采用 sum-gradient 形式(不除以 batch size N)，与 MSE 版本的
+        error = y_pred - y_target 保持范式一致。Loss 值仍使用 mean 以保持与
+        PyTorch 默认行为一致，batch 尺度由学习率 lr 吸收。
+
         Args:
             x: 输入 (batch, in_features)
             y_target: 目标
                 - CE 模式: (batch,) Long 类别索引，或 (batch, C) one-hot/概率分布
                 - BCE 模式: (batch, C) float，值域 [0, 1]
-            loss_mode: "ce" (Softmax 交叉熵) | "bce" (Sigmoid 二分类)
-        
+            loss_mode: "ce" | "bce"
+
         Returns:
-            loss: 标量损失值(mean 形式)
-        
-        Raises:
-            RuntimeError: use_hgf_closed_form 未启用
-            ValueError: loss_mode 不合法
+            loss: 标量损失值(mean)
         """
         if not self.cfg.use_hgf_closed_form:
             raise RuntimeError("hgf_closed_form_update 仅在 use_hgf_closed_form=True 时可用")
         if x.dtype != self.lora_A.dtype:
             x = x.to(self.lora_A.dtype)
-        
+
         with torch.no_grad():
-            # === 步骤 1：前向传播(HGF_CE.md §一 模型结构)===
-            h, h_relu, y_pred, effective_B, scale = self._hgf_forward_pass(x)
-            
-            # === 步骤 2：计算 δ = activation(z) - y_target(HGF_CE.md §四/§五)===
-            delta, loss = self._compute_hgf_delta(y_pred, y_target, loss_mode)
-            
-            # HGF 冲突信号：使用 |δ| 均值作为认知冲突代理
+            # 前向(复现 forward 逻辑但保存中间量)
+            h = F.linear(x, self.lora_A)  # (batch, r)
+
+            # 侧向抑制
+            if self.cfg.use_lateral_connection and self.lateral_weights is not None:
+                h = h - F.linear(h, self.lateral_weights)
+
+            h_relu = F.relu(h)
+
+            if self.cfg.use_hidora and self.m_x is not None and self.m_y is not None:
+                effective_B = self.lora_B * self.m_x.unsqueeze(1)
+                y_pred = F.linear(h_relu, effective_B)
+            else:
+                y_pred = F.linear(h_relu, self.lora_B)
+
+            scale = self.cfg.lora_alpha / self.cfg.r
+            y_pred = y_pred * scale
+
+            # 加上基座和 W_acc(冻结，不求导)
+            y_base = F.linear(x, self.W0, self.bias)
+            if self.cfg.use_relora:
+                y_base = y_base + F.linear(x, self._get_W_acc())
+            y_pred = y_pred + y_base
+
+            N = y_pred.size(0)
+
+            # ========== 2. 损失与 δ = ∂L/∂z ==========
+            loss_mode = loss_mode.lower()
+            if loss_mode == "ce":
+                if y_target.dtype == torch.long:
+                    loss = F.cross_entropy(y_pred, y_target)
+                    probs = F.softmax(y_pred, dim=-1)
+                    y_onehot = F.one_hot(y_target, num_classes=y_pred.size(-1)).to(probs.dtype)
+                    delta = probs - y_onehot
+                else:
+                    target = y_target.to(y_pred.dtype)
+                    probs = F.softmax(y_pred, dim=-1)
+                    probs = probs.clamp(min=1e-7, max=1.0)
+                    loss = -(target * torch.log(probs)).sum(dim=-1).mean()
+                    delta = probs - target
+
+                if getattr(self.cfg, 'hgf_label_smoothing', 0.0) > 0.0:
+                    eps = self.cfg.hgf_label_smoothing
+                    num_classes = y_pred.size(-1)
+                    if y_target.dtype == torch.long:
+                        y_onehot = torch.zeros_like(probs).scatter_(-1, y_target.unsqueeze(-1), 1.0)
+                        target = y_onehot * (1.0 - eps) + eps / num_classes
+                        delta = probs - target
+                    else:
+                        target = target * (1.0 - eps) + eps / num_classes
+                        delta = probs - target
+
+            elif loss_mode == "bce":
+                target = y_target.float().to(y_pred.dtype)
+                loss = F.binary_cross_entropy_with_logits(y_pred, target)
+                probs = torch.sigmoid(y_pred)
+                delta = probs - target
+            else:
+                raise ValueError(f"不支持的 loss_mode: {loss_mode}，仅支持 'ce' 或 'bce'")
+
+            # HGF 冲突信号：使用 |δ| 均值作为代理
             conflict_signal = delta.abs().mean().item()
             self._append_hgf_conflict(conflict_signal)
-            
-            # === 步骤 3：闭式梯度计算(HGF_CE.md §七 统一公式)===
-            grad_A, grad_B = self._compute_hgf_closed_grads(
-                delta, h, h_relu, x, effective_B, scale
-            )
-            
-            # === 步骤 4：参数更新 ===
+
+            # ========== 3. 闭式梯度计算(与 MSE 后半段一致) ==========
+            grad_B = torch.mm(delta.t(), h_relu) * scale
+
+            B_for_grad = effective_B if (self.cfg.use_hidora and self.m_x is not None and self.m_y is not None) else self.lora_B
+            grad_h = torch.mm(delta, B_for_grad) * (h > 0).float() * scale
+            grad_h = grad_h.to(self.cfg.AMP_DTYPE)
+            grad_A = torch.mm(grad_h.t(), x)
+
             lr = self._get_effective_lora_lr()
-            self._apply_hgf_parameter_update(grad_A, grad_B, lr)
-            
+            self.lora_B.data.sub_(lr * grad_B)
+            self.lora_A.data.sub_(lr * grad_A)
+
+            # 记录闭式更新的参数幅度变化，用于冲突检测回退
+            delta_norm = (lr * grad_B).norm().item() + (lr * grad_A).norm().item()
+            self._append_hgf_delta(delta_norm)
+
+            # Hi-DoRA 幅度向量更新
+            if self.cfg.use_hidora and self.m_x is not None and self.m_y is not None:
+                self.m_x.data.sub_(lr * grad_B.norm(dim=1) * 1e-3)
+                self.m_y.data.sub_(lr * grad_A.norm(dim=0) * 1e-3)
+
             return loss
 
 
@@ -2755,9 +2526,6 @@ class AeloruLayer(nn.Module):
             'conflict_score': self.conflict_score,
             '_last_sleep_step': self._last_sleep_step,
             '_explore_start_step': self._explore_start_step,
-            # 低秩 Hebbian 痕迹（DLAM 睡眠与 Fisher 冲突诊断）
-            'hebb_trace_B': self.hebb_trace_B.cpu() if self.hebb_trace_B is not None else None,
-            'hebb_trace_A': self.hebb_trace_A.cpu() if self.hebb_trace_A is not None else None,
             # 3 新增字段
             'C_y_diag': self.C_y_diag.cpu() if self.C_y_diag is not None else None,
             'C_y_U': self.C_y_U.cpu() if self.C_y_U is not None else None,
@@ -2835,10 +2603,6 @@ class AeloruLayer(nn.Module):
             self._prev_y_mean.copy_(checkpoint['_prev_y_mean'].to(self._prev_y_mean.device))
         if 'stored_patterns' in checkpoint and checkpoint['stored_patterns'] is not None and self.stored_patterns is not None:
             self.stored_patterns.copy_(checkpoint['stored_patterns'].to(self.stored_patterns.device))
-        if 'hebb_trace_B' in checkpoint and checkpoint['hebb_trace_B'] is not None and self.hebb_trace_B is not None:
-            self.hebb_trace_B.copy_(checkpoint['hebb_trace_B'].to(self.hebb_trace_B.device))
-        if 'hebb_trace_A' in checkpoint and checkpoint['hebb_trace_A'] is not None and self.hebb_trace_A is not None:
-            self.hebb_trace_A.copy_(checkpoint['hebb_trace_A'].to(self.hebb_trace_A.device))
         if 'conflict_score' in checkpoint:
             if isinstance(self.conflict_score, torch.Tensor):
                 value = checkpoint['conflict_score']
@@ -2880,8 +2644,7 @@ def inject_aeloru(
     target_names: list = None,
     cfg: Optional[AeloruConfig] = None,
     r: int = 8,
-    alpha: float = 4.0,
-    register_hook: bool = True
+    alpha: float = 4.0
 ) -> nn.Module:
     """
     递归地将模型中的指定线性层替换为 Aeloru 适配器。
@@ -2889,14 +2652,12 @@ def inject_aeloru(
     Args:
         model: 待注入的 PyTorch 模型
         target_names: 目标层名列表，默认 Transformer 常见层
-        cfg: AeloruConfig 配置对象（优先）
-        r: LoRA 秩（cfg 为 None 时使用）
-        alpha: LoRA 缩放因子（cfg 为 None 时使用）
-        register_hook: 是否在此模型上注册批量前向钩子。递归调用时应为 False，
-                       避免在子模块（如 self_attn）上注册钩子破坏其返回结构。
+        cfg: AeloruConfig 配置对象(优先)
+        r: LoRA 秩(cfg 为 None 时使用)
+        alpha: LoRA 缩放因子(cfg 为 None 时使用)
     
     Returns:
-        注入后的模型（原地修改）
+        注入后的模型(原地修改)
     
     PS:
     优化注入函数：
@@ -2913,59 +2674,53 @@ def inject_aeloru(
         cfg = AeloruConfig(r=r, lora_alpha=alpha)
     
     for name, module in list(model.named_children()):
-        # 跳过已注入的Aeloru层
+        # 跳过已经注入的Aeloru层
         if isinstance(module, AeloruLayer):
             continue
         
-        # 递归处理子模块（确保结果传递）。子模块不注册批量钩子，
-        # 防止破坏 Qwen2 等模型中 self_attn 的 (hidden_states, _) 返回结构。
-        if hasattr(module, "children") and len(list(module.children())) > 0:
-            inject_aeloru(module, target_names, cfg, register_hook=False)
+        # 递归遍历子模块
+        if len(list(module.children())) > 0:
+            inject_aeloru(module, target_names, cfg)
         
-        # 替换目标线性层
+        # 匹配目标线性层
         if isinstance(module, nn.Linear) and any(target in name for target in target_names):
+            # 创建Aeloru层，传入原始线性层
             aeloru_layer = AeloruLayer(
                 module.in_features, 
                 module.out_features, 
                 cfg,
                 original_linear=module
             )
+            
+            # 注入预训练权重，自动同步设备和精度
             aeloru_layer.set_pretrained_weight(
                 module.weight.data,
                 getattr(module, 'bias', None)
             )
             
-            # === 关键验证 ===
-            if aeloru_layer.original_weight is None:
-                raise RuntimeError(f"权重注入失败: {name}")
-            
+            # 替换原层
             setattr(model, name, aeloru_layer)
+            
             if cfg.verbose:
                 print(f"  [Aeloru] Injected into {name} | shape: {module.in_features}x{module.out_features}")
-    
-    # === 收集所有AeloruLayer并注册模型级钩子 ===
-    # 仅在最顶层模型注册钩子，避免替换中间模块（如 self_attn）的返回结构。
-    batch_layers = [
-        layer for layer in model.modules() 
-        if isinstance(layer, AeloruLayer)
-    ]
-    
-    if register_hook and batch_layers:
-        def batch_forward_hook(module, inp, output):
-            try:
-                input_tensor = inp[0] if inp else output
-                # 批量计算所有层的 LoRA 增量，并缓存到各层供 AeloruLayer.forward 读取
-                batch_results = batch_forward_lora(input_tensor, batch_layers)
-                for layer in batch_layers:
-                    layer._batch_result = batch_results
-            except Exception as e:
-                print(f"[ERROR] Batch hook failed: {e}")
-            # 始终返回原始输出，不能替换为 dict/None，否则 transformers 模型会崩溃
-            return output
-        
+            # 注册批量前向钩子
+        batch_layers = []
+        for layer in model.modules():
+            if isinstance(layer, AeloruLayer):
+                batch_layers.append(layer)
+
+        def batch_forward_hook(module, inp, out):
+            if not module.training:
+                return
+            # 一次性计算所有层的LoRA增量
+            batch_results = batch_forward_lora(inp[0], batch_layers)
+            # 把结果分配给各层
+            for layer in batch_layers:
+                layer._batch_result = batch_results
+
+        # 注册到模型的最顶层
         model.register_forward_hook(batch_forward_hook)
     
-    # === 强制返回模型 ===
     return model
 
 
@@ -3410,7 +3165,7 @@ def test_aeloru():
         }),
         ("全功能开启(BP后)", {
             'use_hidora': True, 'use_relora': True, 'use_hebbian': True,
-            'use_fisher': False, 'use_hongwen': True,
+            'use_fisher': True, 'use_hongwen': True,
             'use_orthogonal_penalty': True, 'use_energy_budget': True,
             'use_lateral_connection': True, 'use_homeostatic_plasticity': True,
             'use_volatility_coupling': True, 'use_dlam_sleep': True,
@@ -3419,7 +3174,7 @@ def test_aeloru():
             'presumed_domain': 'nnantisparse',
             'use_online_covariance': True, 'use_whitening': True,
             'use_hgf_closed_form': True,
-            'hebbian_before_backprop': True,
+            'hebbian_before_backprop': True
         })
     ]
     

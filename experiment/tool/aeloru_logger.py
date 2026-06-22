@@ -185,7 +185,7 @@ PyTorch Version: {torch.__version__}
 
 # ==================== 便捷函数 ====================
 def get_logger(experiment_name: str = "default") -> AeLoRuLogger:
-    """获取日志器实例（全局统一入口）"""
+    """获取日志器实例(全局统一入口)"""
     return AeLoRuLogger(experiment_name)
 
 

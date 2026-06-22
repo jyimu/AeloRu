@@ -162,7 +162,7 @@ def main():
     hidden_tensor = torch.stack(all_hidden)  # [n_samples, hidden_dim]
     logger.log(f"Collected hidden states: {hidden_tensor.shape}")
     
-    # PCA降维（纯PyTorch）
+    # PCA降维(纯PyTorch)
     logger.log("Running PCA (PyTorch implementation)...")
     pca = TorchPCA(n_components=2)
     hidden_2d = pca.fit_transform(hidden_tensor)
@@ -203,7 +203,7 @@ def main():
     plt.savefig(plot_file, dpi=150, bbox_inches='tight')
     logger.log(f"Plot saved to {plot_file}")
     
-    # 分析聚类质量（纯PyTorch计算类内/类间距离）
+    # 分析聚类质量(纯PyTorch计算类内/类间距离)
     logger.log("Analyzing clustering quality...")
     
     # 计算每个类别的中心
@@ -214,7 +214,7 @@ def main():
         center = cat_points.mean(dim=0)
         category_centers[cat] = center
     
-    # 计算类内距离（平均到中心的距离）
+    # 计算类内距离(平均到中心的距离)
     intra_distances = {}
     for cat in sentences.keys():
         mask = torch.tensor([l == cat for l in all_labels])
@@ -223,7 +223,7 @@ def main():
         distances = torch.norm(cat_points - center, dim=1)
         intra_distances[cat] = distances.mean().item()
     
-    # 计算类间距离（中心之间的距离）
+    # 计算类间距离(中心之间的距离)
     inter_distances = []
     cats = list(sentences.keys())
     for i in range(len(cats)):
