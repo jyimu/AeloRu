@@ -58,10 +58,10 @@ except ImportError:
 # 【兼容】支持从同级目录或上传路径导入
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
-    from aeloru_layer import AeloruLayer, AeloruConfig, train_aeloru_step
+    from aeloru_layer import AeloruLayer, AeloruConfig, train_aeloru_step, cross_modal_sleep_step
 except ImportError:
     sys.path.insert(0, "/mnt/agents/upload")
-    from aeloru_layer import AeloruLayer, AeloruConfig, train_aeloru_step
+    from aeloru_layer import AeloruLayer, AeloruConfig, train_aeloru_step, cross_modal_sleep_step
 
 
 # =============================================================================
@@ -103,6 +103,8 @@ class ProfilerConfig:
         use_homeostatic_plasticity: 是否启用 PEM 稳态可塑性
         use_volatility_coupling: 是否启用 HGF 波动率耦合
         use_dlam_sleep: 是否启用 DLAM 谱滤波睡眠
+        use_cross_modal_binding: 是否启用 DLAM 跨层异联想绑定
+        cross_modal_coupling: 跨层异联想耦合强度
         use_hgf_fisher: 是否启用 HGF 闭式 Fisher
         use_predictive_coding: 是否启用预测编码神经动态
         use_source_domain_constraint: 是否启用源信号域约束
@@ -144,6 +146,8 @@ class ProfilerConfig:
     use_homeostatic_plasticity: bool = True
     use_volatility_coupling: bool = True
     use_dlam_sleep: bool = True
+    use_cross_modal_binding: bool = True
+    cross_modal_coupling: float = 0.01
     use_hgf_fisher: bool = True
     use_predictive_coding: bool = True
     use_source_domain_constraint: bool = True
@@ -171,7 +175,7 @@ class AeloruProfiler:
     - Forward: 前向传播各子模块(线性变换、LoRA、侧向抑制、稳态增益等)
     - Backward: 反向传播与梯度计算
     - Optimizer: 优化器参数更新
-    - Post-Step: Hebbian + Hong Wen 状态机 + ReLoRA 合并 + DLAM 睡眠
+    - Post-Step: Hebbian + Hong Wen 状态机 + ReLoRA 合并 + DLAM 睡眠 + DLAM 跨层绑定
     - Overhead: Profiler 与数据搬运等额外开销
 
     Args:
@@ -230,6 +234,8 @@ class AeloruProfiler:
             use_homeostatic_plasticity=self.cfg.use_homeostatic_plasticity,
             use_volatility_coupling=self.cfg.use_volatility_coupling,
             use_dlam_sleep=self.cfg.use_dlam_sleep,
+            use_cross_modal_binding=self.cfg.use_cross_modal_binding,
+            cross_modal_coupling=self.cfg.cross_modal_coupling,
             use_hgf_fisher=self.cfg.use_hgf_fisher,
             use_predictive_coding=self.cfg.use_predictive_coding,
             use_source_domain_constraint=self.cfg.use_source_domain_constraint,
@@ -445,6 +451,9 @@ class AeloruProfiler:
                             y_target=y_target
                         )
 
+                    with record_function("cross_modal_sleep_step"):
+                        cross_modal_sleep_step(self.layer)
+
         # --- 导出与摘要 ---
         prof.export_chrome_trace(trace_path)
         self._verify_file_exists(trace_path, "Chrome Trace 导出")
@@ -636,6 +645,7 @@ class AeloruProfiler:
             ('稳态可塑性', self.cfg.use_homeostatic_plasticity),
             ('波动率耦合', self.cfg.use_volatility_coupling),
             ('DLAM睡眠', self.cfg.use_dlam_sleep),
+            ('跨层绑定', self.cfg.use_cross_modal_binding),
             ('HGF Fisher', self.cfg.use_hgf_fisher),
             ('预测编码', self.cfg.use_predictive_coding),
             ('域约束', self.cfg.use_source_domain_constraint),
@@ -687,7 +697,7 @@ class AeloruProfiler:
         post_time = timing_dict.get('post_step_update', 0)
         post_pct = post_time / total_time * 100 if total_time > 0 else 0
         if post_time > 0:
-            lines.append(f"• Post-step 开销: {post_pct:.1f}% (Hebbian + 状态机 + 合并)")
+            lines.append(f"• Post-step 开销: {post_pct:.1f}% (Hebbian + 状态机 + 合并 + 跨层绑定)")
 
         # Optimizer 开销
         opt_time = timing_dict.get('optimizer_step', 0)
@@ -937,6 +947,100 @@ def analyze_raw_trace(trace_path: str, top_k: int = 30) -> Dict[str, Any]:
 
 
 # =============================================================================
+# 功能测试：DLAM 跨层异联想绑定
+# =============================================================================
+
+def functional_test_cross_modal_binding() -> None:
+    """
+    验证 _cross_modal_binding 与 cross_modal_sleep_step 的基本功能。
+
+    测试点：
+    1. 同维度两层在 post_step_update 后调用 cross_modal_sleep_step，
+       Hebbian 低秩痕迹应发生可观测变化。
+    2. 不同维度层组合不应报错，应被形状检查跳过。
+    """
+    print("\n[FunctionalTest] DLAM 跨层异联想绑定功能测试")
+    print("-" * 70)
+
+    cfg = AeloruConfig(
+        in_features=64,
+        out_features=64,
+        r=4,
+        use_hebbian=True,
+        use_dlam_sleep=True,
+        use_cross_modal_binding=True,
+        cross_modal_coupling=0.05,
+        sleep_condition_threshold=1e9,  # 避免自动 dreaming 干扰对比
+        verbose=False,
+        device="cpu",
+    )
+
+    class TinyModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.l1 = AeloruLayer(64, 64, cfg)
+            self.l2 = AeloruLayer(64, 64, cfg)
+
+    model = TinyModel()
+    model.train()
+    x = torch.randn(8, 64)
+
+    y1 = model.l1(x)
+    y2 = model.l2(x)
+    model.l1.post_step_update(x, y1)
+    model.l2.post_step_update(x, y2)
+
+    a1_before = model.l1.hebb_trace_A.detach().clone()
+    b1_before = model.l1.hebb_trace_B.detach().clone()
+    a2_before = model.l2.hebb_trace_A.detach().clone()
+    b2_before = model.l2.hebb_trace_B.detach().clone()
+
+    cross_modal_sleep_step(model)
+
+    diff = (
+        torch.abs(model.l1.hebb_trace_A - a1_before).sum()
+        + torch.abs(model.l1.hebb_trace_B - b1_before).sum()
+        + torch.abs(model.l2.hebb_trace_A - a2_before).sum()
+        + torch.abs(model.l2.hebb_trace_B - b2_before).sum()
+    )
+
+    assert diff > 0, "跨层绑定未改变任何 Hebbian 低秩痕迹"
+    print(f"[FunctionalTest] 同维度两层绑定正常，Hebbian 痕迹 L1 变化: {diff.item():.6f}")
+
+    # 形状不匹配层组合：应被 _cross_modal_binding 中的形状检查跳过
+    cfg2 = AeloruConfig(
+        in_features=32,
+        out_features=32,
+        r=4,
+        use_hebbian=True,
+        use_dlam_sleep=True,
+        use_cross_modal_binding=True,
+        cross_modal_coupling=0.05,
+        sleep_condition_threshold=1e9,
+        verbose=False,
+        device="cpu",
+    )
+
+    class MismatchModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.l1 = AeloruLayer(64, 64, cfg)
+            self.l2 = AeloruLayer(32, 32, cfg2)
+
+    mm = MismatchModel()
+    mm.train()
+    x1 = torch.randn(8, 64)
+    x2 = torch.randn(8, 32)
+    y1 = mm.l1(x1)
+    y2 = mm.l2(x2)
+    mm.l1.post_step_update(x1, y1)
+    mm.l2.post_step_update(x2, y2)
+    cross_modal_sleep_step(mm)
+    print("[FunctionalTest] 形状不匹配层处理正常")
+    print("[FunctionalTest] 全部通过")
+
+
+# =============================================================================
 # 主入口
 # =============================================================================
 
@@ -957,7 +1061,10 @@ def main() -> None:
         print("[Warning] CUDA 不可用，切换到 CPU 模式")
         cfg.device = "cpu"
 
-    # 创建分析器并运行
+    # 1. 运行功能测试
+    functional_test_cross_modal_binding()
+
+    # 2. 创建分析器并运行完整分析
     profiler = AeloruProfiler(cfg)
     results = profiler.run_full_analysis()
 

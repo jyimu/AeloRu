@@ -35,9 +35,6 @@ Aeloru (Adaptive Elastic Learning with Orthogonal ReLoRA Units)
 Author: JYIMU
 """
 
-from re import S
-
-import accelerate
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -46,7 +43,6 @@ from typing import Optional, Dict, Any, Tuple, Callable, List
 from dataclasses import dataclass
 from enum import Enum
 import os
-import warnings
 
 # =============================================================================
 # 配置类
@@ -238,7 +234,7 @@ class AeloruConfig:
     volatility_init: float = 0.0           # 初始 log-volatility
 
     # --- HGF 闭式一步更新(实验性)---
-    use_hgf_closed_form: bool = False    # 实验性：用闭式梯度替代 autograd(若开启Hebbian先于BP,需要将其开启)
+    use_hgf_closed_form: bool = False    # 实验性：用闭式梯度替代(若开启Hebbian先于BP,需要将其开启)
     hgf_loss_mode: str = "ce"           # "ce" (Softmax交叉熵) | "bce" (Sigmoid二分类)
     hgf_label_smoothing: float = 0.0      # 标签平滑系数(仅CE模式)
 
@@ -428,8 +424,106 @@ def batch_forward_lora(x, layers):
 
 
 # =============================================================================
+# 低秩精度矩阵 (LowRankPrecisionMatrix)
+# =============================================================================
+
+class LowRankPrecisionMatrix(nn.Module):
+    """
+    低秩精度矩阵: 将 O(out^3) 的 Cholesky 维护降为 O(r^2 * out)。
+    
+    假设输出协方差为低秩 + 对角扰动:
+        C_y = B_basis @ C_h @ B_basis^T + epsilon * I
+    其中 B_basis (out_features, r), C_h (r, r)。
+    
+    使用 Woodbury 恒等式求逆并作用于向量:
+        C_y^{-1} y = (1/eps) y - (1/eps) B_basis @ M^{-1} @ (1/eps) B_basis^T y
+    其中 M = C_h^{-1} + (1/eps) B_basis^T B_basis。
+    """
+
+    def __init__(self, out_features: int, r: int, device: str = "cuda",
+                 basis_update_interval: int = 100, ema_alpha: float = 0.9,
+                 epsilon: float = 0.2):
+        super().__init__()
+        self.out_features = out_features
+        self.r = r
+        self.basis_update_interval = basis_update_interval
+        self.ema_alpha = ema_alpha
+        self.epsilon = epsilon
+        self.step = 0
+        self.register_buffer(
+            'B_basis',
+            torch.zeros(out_features, r, device=device, dtype=torch.float32)
+        )
+        self.register_buffer(
+            'C_h',
+            torch.eye(r, device=device, dtype=torch.float32) * 0.2
+        )
+
+    def update(self, B: torch.Tensor, y: torch.Tensor) -> None:
+        """
+        从 lora_B 和输出自动提取基并更新低秩协方差。
+        
+        Args:
+            B: (out_features, r) 低秩基 (e.g. lora_B)
+            y: (batch, out_features) 当前输出
+        """
+        with torch.no_grad():
+            B = B.detach().float()
+            y = y.detach().float()
+            # 提取基：直接使用 lora_B
+            self.B_basis.copy_(B)
+            y_mean = y.mean(dim=0)
+            y_bar = y - y_mean.unsqueeze(0)
+            h = torch.matmul(y_bar, self.B_basis)
+            h_cov = torch.matmul(h.t(), h) / h.size(0)
+            self.C_h.mul_(self.ema_alpha).add_(h_cov, alpha=1 - self.ema_alpha)
+            self.step += 1
+
+    def apply_precision(self, y_bar: torch.Tensor) -> torch.Tensor:
+        """
+        计算 C_y^{-1} @ y_bar, 其中 C_y = B C_h B^T + epsilon I。
+        
+        Args:
+            y_bar: (batch, out_features)
+        
+        Returns:
+            (batch, out_features)
+        """
+        with torch.no_grad():
+            B = self.B_basis
+            eps = self.epsilon
+            Bt_y = torch.matmul(B.t(), y_bar.t())  # (r, batch)
+            BtB = torch.matmul(B.t(), B)  # (r, r)
+            C_h_inv = torch.linalg.inv(self.C_h)
+            M = C_h_inv + BtB / eps
+            z = torch.linalg.solve(M, Bt_y / eps)
+            result = y_bar.t() / eps - torch.matmul(B, z) / eps
+            return result.t()
+
+    def spectral_filter(self, threshold: float) -> torch.Tensor:
+        """
+        对低秩协方差 C_h 直接做谱滤波。
+        
+        Args:
+            threshold: 条件数阈值
+        
+        Returns:
+            条件数
+        """
+        with torch.no_grad():
+            eigvals, eigvecs = torch.linalg.eigh(self.C_h)
+            cond = eigvals[-1] / (eigvals[0] + 1e-10)
+            if cond > threshold:
+                min_eig = eigvals[-1] / threshold
+                eigvals_filtered = torch.clamp(eigvals, min=min_eig)
+                self.C_h = eigvecs @ torch.diag(eigvals_filtered) @ eigvecs.t()
+            return cond
+
+
+# =============================================================================
 # 核心层：AeloruLayer
 # =============================================================================
+
 
 class AeloruLayer(nn.Module):
     """
@@ -708,16 +802,46 @@ class AeloruLayer(nn.Module):
         self._reset_adapters()  # 重置低秩适配器
         self.register_buffer('W0_norm_sq', torch.tensor(0.0, dtype=torch.float32))  # 基座范数
         self._pending_optimizer_reset = False  # 优化器重置标志
+        self._pending_cross_modal = False      # 模型级跨层绑定标记（DLAM 与 LAM 同时运行）
 
         # ========== 预测性解相关 (PredictiveDecorrBSS) ==========
         if cfg.use_predictive_coding:
-            self.register_buffer('C_y_diag', 0.2 * torch.ones(self.out_features, dtype=cfg.AMP_DTYPE, device=cfg.device))
-            self.register_buffer('C_y_U', torch.zeros(self.out_features, cfg.predictive_coding_rank, dtype=cfg.AMP_DTYPE, device=cfg.device))
-            self.register_buffer('mu_y', torch.zeros(self.out_features, dtype=cfg.AMP_DTYPE, device=cfg.device))
+            # 低秩精度矩阵：O(r^2 * out) 替代 O(out^3) Cholesky
+            self.lowrank_precision = LowRankPrecisionMatrix(
+                self.out_features, cfg.r, device=cfg.device,
+                basis_update_interval=100, ema_alpha=cfg.lambda_lateral
+            )
+            self.register_buffer('C_y_L', None)  # 兼容旧代码
+        
+            self.register_buffer(
+                'mu_y', 
+                torch.zeros(self.out_features, dtype=torch.float32, device=cfg.device)
+            )
+            self.register_buffer(
+                'mu_y_prev', 
+                torch.zeros(self.out_features, dtype=torch.float32, device=cfg.device)
+            )
+        
+            # HGF 波动率状态（自动调节学习率）
+            self.register_buffer('omega_cy', torch.tensor(0.0, dtype=torch.float32))
+            self.register_buffer('dynamic_lr_cy', torch.tensor(1.0, dtype=torch.float32))
+        
+            # 谱滤波阈值
+            self._cy_condition_threshold = 100.0
+            self._cy_epsilon = 1e-5
+        
+            # 保留旧字段为 None，兼容外部代码读取
+            self.register_buffer('C_y_diag', None)
+            self.register_buffer('C_y_U', None)
         else:
+            self.lowrank_precision = None
+            self.C_y_L = None
+            self.mu_y = None
+            self.mu_y_prev = None
+            self.omega_cy = None
+            self.dynamic_lr_cy = None
             self.C_y_diag = None
             self.C_y_U = None
-            self.mu_y = None
 
         # ========== 在线协方差与动态白化 (CorInfoMaxBSS) ==========
         if cfg.use_online_covariance or cfg.use_whitening:
@@ -1074,8 +1198,9 @@ class AeloruLayer(nn.Module):
         Returns:
             y_relaxed: 松弛后的神经活动
         """
-        if not self.cfg.use_predictive_coding or self.C_y_diag is None or not self.training:
+        if not self.cfg.use_predictive_coding or self.lowrank_precision is None or not self.training:
             return y
+
         
         with torch.no_grad():
             # print(f"Input x shape: {x.shape}")  # 调试：打印输入形状
@@ -1088,15 +1213,11 @@ class AeloruLayer(nn.Module):
             W_base = self.W0 + self._get_W_acc()
             yke = F.linear(x, W_base)  # (batch, out_features)
             
-            # 提取 C_y 的对角(方差)
-            # 确保 C_y_U 的形状为 (out_features, rank)，有时从检查点或外部操作中可能被意外转置
-            CU = self.C_y_U
-            if CU is None:
-                return y
-            if CU.dim() == 2 and CU.shape[0] != y.shape[-1] and CU.shape[1] == y.shape[-1]:
-                CU = CU.t()
-            diag_U = torch.sum(CU * CU, dim=1,dtype=self.cfg.AMP_DTYPE)
-            D_y = self.C_y_diag + diag_U + self.cfg.epsilon  # (out_features,)
+            # 使用低秩精度矩阵维护输出协方差
+            # lowrank_precision 已在 __init__ 中确保非空
+
+
+
             
             y_current = y.clone()
             
@@ -1109,37 +1230,18 @@ class AeloruLayer(nn.Module):
                 # 1. 预测误差项：实际输出与基座预测的 mismatch
                 error = y_current - yke  # (batch, out_features)
                 
-                # 2. 侧向抑制项：归一化解相关(PredictiveDecorrBSS 精确公式)
-                y_bar = y_current - self.mu_y.unsqueeze(0)  # (batch, out_features) or (out_features,) for 1D
-                y_bar_norm = y_bar / (D_y.unsqueeze(0) + self.cfg.epsilon)
+                # 2. 侧向抑制项：使用低秩精度矩阵 O(r^2 * out)
+                if self.cfg.use_predictive_coding and self.lowrank_precision is not None:
+                    y_bar = y_current - self.mu_y.unsqueeze(0)
+                    C_y_inv_y = self.lowrank_precision.apply_precision(y_bar)
 
-                # ---- 修正 y_bar_norm 形状以兼容 torch.mm(要求严格2D矩阵) ----
-                # Qwen2注意力投影可能传入无batch维度的1D张量，导致 torch.mm 抛出
-                # RuntimeError: self must be a matrix。此处根据原始维度灵活恢复合规的2D形状。
-                _nb_dims = y_bar_norm.dim()
-                if _nb_dims == 1:
-                    # (out_features,) -> (1, out_features)：单样本场景补充batch维度
-                    y_bar_norm = y_bar_norm.unsqueeze(0)
-                    y_bar = y_bar.unsqueeze(0)  # 同步 y_bar 以保持后续lateral形状一致
-                elif _nb_dims > 2:
-                    # (..., out_features) -> (N, out_features)：折叠多余维度
-                    y_bar_norm = y_bar_norm.view(-1, y_bar_norm.shape[-1])
-                    y_bar = y_bar.view(-1, y_bar.shape[-1])
+                    # lateral = 协方差归一化 - 原始偏差
+                    lateral = C_y_inv_y - y_bar
 
-                # 使用修正后的 CU，确保矩阵乘法维度正确
-                y_proj = torch.mm(y_bar_norm, CU)  # (batch_or_1, rank)
-                y_uu = torch.mm(y_proj, CU.t())  # (batch_or_1, out_features)
-                # 冗余保护：若低秩乘法导致维度不匹配（来自意外的 CU 形状或广播问题），
-                # 则退回到显式构造 C_y_full = CU @ CU.t() 来保证 (batch, out_features)
-                if y_uu.shape[-1] != y_current.shape[-1]:
-                    C_y_full = torch.matmul(CU, CU.t())
-                    y_uu = torch.matmul(y_bar_norm, C_y_full)
-                lateral = (y_uu - y_bar_norm * diag_U.unsqueeze(0) - y_bar) / (D_y.unsqueeze(0) + self.cfg.epsilon)
-                if lateral.shape != y_current.shape:
-                    lateral = lateral.view(y_current.shape)
-                
-                # 3. 总梯度 = 预测误差 + 侧向抑制
-                grady = self.cfg.gamma_predictive * error + lateral  # (batch, out_features)
+                    # 总梯度 = gamma * 预测误差 + lateral 抑制
+                    grady = self.cfg.gamma_predictive * error + lateral
+
+
                 
                 # 4. 梯度下降更新
                 y_current = y_current - lr_y * grady
@@ -1405,17 +1507,33 @@ class AeloruLayer(nn.Module):
             if self.cfg.use_predictive_coding or self.cfg.use_online_covariance:
                 with torch.no_grad():
                     # 输出空间统计(用于预测编码的侧向抑制)
-                    if self.mu_y is not None and self.C_y_diag is not None:
-                        y_mean = y.mean(dim=0).float()
-                        self.mu_y.mul_(self.cfg.lambda_lateral).add_(y_mean, alpha=1 - self.cfg.lambda_lateral)
-                        y_bar = y_mean - self.mu_y
-                        diag_update = y_bar * y_bar
-                        self.C_y_diag.mul_(self.cfg.lambda_lateral).add_(diag_update, alpha=1 - self.cfg.lambda_lateral)
-                        if self.C_y_U is not None:
-                            self.C_y_U.mul_(math.sqrt(self.cfg.lambda_lateral))
-                            idx = getattr(self, '_C_y_U_pos', 0) % self.C_y_U.shape[1]
-                            self.C_y_U[:, idx].copy_(y_bar * math.sqrt(1 - self.cfg.lambda_lateral))
-                            self._C_y_U_pos = idx + 1
+                    if self.cfg.use_predictive_coding and self.lowrank_precision is not None:
+                        with torch.no_grad():
+                            y_mean = y.mean(dim=0).float()
+
+                            # 1. 预测误差（意外度）
+                            prediction_error = (y_mean - self.mu_y_prev).abs().mean()
+
+                            # 2. HGF 波动率更新：意外度越大，学习率越高
+                            exp_omega = torch.exp(self.omega_cy)
+                            self.omega_cy.add_(self.cfg.volatility_lr * (prediction_error ** 2 - exp_omega))
+                            self.omega_cy.clamp_(-5.0, 5.0)
+                            self.dynamic_lr_cy.fill_(1.0 / torch.exp(self.omega_cy).clamp(min=0.1, max=10.0))
+
+                            # 3. 更新均值（EMA，经波动率调制）
+                            lr_eff = (1 - self.cfg.lambda_lateral) * self.dynamic_lr_cy.item()
+                            self.mu_y.mul_(self.cfg.lambda_lateral).add_(y_mean, alpha=lr_eff)
+
+                            # 4. 低秩更新：从 lora_B 和输出自动提取基并更新协方差
+                            self.lowrank_precision.update(self.lora_B, y)
+
+                            # 5. 谱滤波直接在 r×r 的 C_h 上操作
+                            cond = self.lowrank_precision.spectral_filter(self._cy_condition_threshold)
+
+                            # 6. 更新历史均值
+                            self.mu_y_prev.copy_(y_mean)
+
+
                     
                     # 输入空间统计(用于动态白化)
                     if self.mu_x is not None and self.C_x is not None:
@@ -1450,12 +1568,16 @@ class AeloruLayer(nn.Module):
                     self.fisher_mask_inv.copy_(inv.to(self.fisher_mask_inv.dtype))
                 self._fisher_dirty = False
 
-            # 5. 【DLAM】睡眠检查：基于条件数的谱滤波
-            if self.cfg.use_dlam_sleep and self.should_sleep():
-                self._offline_replay()
+            # 5. 【DLAM】 dreaming 与 LAM 共存于统一能量景观
+            # 论文图1： dreaming kernel A_l(t_l) 在层内独立谱滤波，
+            # 跨层耦合 g_lm 通过共享神经动力学交互，二者同时运行。
+            if self.cfg.use_dlam_sleep:
+                # 层内谱滤波：条件数触发时执行 dreaming kernel
+                if self.should_sleep():
+                    self._offline_replay()
+                # 标记跨层绑定：由模型级循环在统一步骤中协调
                 if self.cfg.use_cross_modal_binding:
-                    # 跨模态绑定由外部模型循环调用，此处仅标记
-                    pass
+                    self._pending_cross_modal = True
 
             # 修复：诊断输出改为间隔触发，避免每步同步
             if self.cfg.verbose and self.step_counter % self.cfg.diagnostic_interval == 0:
@@ -1661,15 +1783,6 @@ class AeloruLayer(nn.Module):
             # --- 计算平均激活 ---
             x_mean = x.mean(dim=0)    # (in_features,)
             y_mean = y.mean(dim=0)    # (out_features,)
-            # 预测编码：用预测误差代替原始输出作为 Hebbian 信号
-            # 只学习基座无法预测的"意外"信息，大幅降低冗余更新
-            if self.cfg.use_predictive_coding:
-                W_base = self.W0 + self._get_W_acc()
-                y_pred = F.linear(x, W_base)  # 基座预测
-                error = y - y_pred              # 预测失败 = 意外信息
-                y_signal = error.mean(dim=0)    # (out_features,)
-            else:
-                y_signal = y.mean(dim=0)        # (out_features,)
             
             sign = 1.0 if is_correct else -1.0
             
@@ -2030,42 +2143,125 @@ class AeloruLayer(nn.Module):
     
     def _cross_modal_binding(self, other_layers: List['AeloruLayer']):
         """
-        DLAM 跨模态异联想绑定(论文第2.3节)。
-        
-        在睡眠阶段建立不同层之间的关联，让模型在睡眠中自动建立
-        不同模态/层之间的异联想耦合。
-        
-        公式:
-            C_ij = hebbian_trace_i^T @ hebbian_trace_j / N
-            coupling = strength * (1+t_i) * (1+t_j)
-            hebbian_trace_i += coupling * C_ji
-            hebbian_trace_j += coupling * C_ij
-        
-        Args:
-            other_layers: 其他 AeloruLayer 实例列表(通常来自模型其他层)
+        DLAM 跨模态异联想绑定 —— 基于论文公式(6)和(10)的严格实现。
+
+        论文核心：
+        1. LAM Hamiltonian: H_LAM = -Σ_{l<m} (g_lm/NΓ_lm) Σ_μ Σ_{i,j} ξ̂^μ_{i,l} ξ̂^μ_{j,m} s_{i,l} s_{j,m}
+        2. 用 Mattis 磁化强度重写: m̂^μ_l = (1/N) Σ_i ξ̂^μ_{i,l} s_{i,l}
+        3. 跨层对齐损失: L_cross = (1/2)(m̂^μ_l - m̂^μ_m)^2
+        4. 方差正则化: (1/2)(m̂^μ_l)^2 + (1/2)(m̂^μ_m)^2 （防止表示坍塌）
+
+        在 Aeloru 的低秩近似中，通过全尺寸 Hebbian 痕迹的低秩重构
+        hebb_trace_B @ hebb_trace_A 来近似论文中的经验关联矩阵 Σ_l，
+        并在低秩因子空间上应用对比学习风格的跨层对齐梯度。
         """
         if not self.cfg.use_dlam_sleep or not self.cfg.use_cross_modal_binding:
             return
         if self.hebb_trace_A is None or self.hebb_trace_B is None:
             return
-        
+
         with torch.no_grad():
             for other in other_layers:
                 if other is self or other.hebb_trace_A is None or other.hebb_trace_B is None:
                     continue
-                
-                # 低秩跨模态绑定：在 r 维子空间计算相关性，避免全尺寸矩阵乘积
-                # C_ij = A_i @ A_j^T / r，维度 (r, r)
-                cross_corr = self.hebb_trace_A @ other.hebb_trace_A.T / max(self.cfg.r, 1)
-                
-                # 应用异联想耦合（论文公式5的低秩简化版）
+
                 coupling = self.cfg.cross_modal_coupling
-                
-                # 双向耦合：A 侧子空间互相增强
-                self_A_new = self.hebb_trace_A + coupling * cross_corr @ other.hebb_trace_A
-                other_A_new = other.hebb_trace_A + coupling * cross_corr.T @ self.hebb_trace_A
-                self.hebb_trace_A.copy_(self_A_new)
-                other.hebb_trace_A.copy_(other_A_new)
+
+                # ============================================================
+                # 1. 计算跨层 Mattis 磁化强度的低秩近似
+                # ============================================================
+                # 全尺寸 Hebbian 痕迹的低秩重构：Σ_l ≈ B_l @ A_l
+                self_full = torch.mm(self.hebb_trace_B, self.hebb_trace_A)    # (out, in)
+                other_full = torch.mm(other.hebb_trace_B, other.hebb_trace_A)  # (out, in)
+
+                # 不同层形状不一致时无法直接比较 Mattis 磁化强度
+                if self_full.shape != other_full.shape:
+                    continue
+
+
+                # 归一化的跨层 Frobenius 内积，对应 Mattis 磁化强度的乘积
+                trace_self = torch.trace(torch.mm(self_full.t(), self_full))
+                trace_other = torch.trace(torch.mm(other_full.t(), other_full))
+
+                if trace_self < 1e-10 or trace_other < 1e-10:
+                    continue
+
+                cross_alignment = torch.trace(
+                    torch.mm(self_full.t(), other_full)
+                ) / torch.sqrt(trace_self * trace_other)
+
+                # ============================================================
+                # 2. 应用跨层对齐梯度（论文公式10的变分形式）
+                # ============================================================
+                # 能量分解:
+                #   m̂^μ_l m̂^μ_m = (1/2)(m̂^μ_l)^2 + (1/2)(m̂^μ_m)^2 - (1/2)(m̂^μ_l - m̂^μ_m)^2
+                # 对 m̂^μ_l 的梯度: ∂/∂m̂^μ_l [m̂^μ_l m̂^μ_m] = m̂^μ_m
+                # 在低秩空间中转化为向 other 子空间的投影。
+                self_flat = self_full.view(-1)
+                other_flat = other_full.view(-1)
+
+                alignment_grad = cross_alignment * other_flat / torch.sqrt(trace_other)
+                variance_grad = self_flat / torch.sqrt(trace_self)  # 防止坍塌
+                grad_flat = alignment_grad - 0.5 * variance_grad
+
+                grad_full = grad_flat.view_as(self_full)
+
+                # 将梯度投影回低秩因子空间（SVD 保持低秩约束）
+                svd_success = False
+                try:
+                    U_grad, S_grad, Vh_grad = torch.linalg.svd(grad_full.float(), full_matrices=False)
+                    r_eff = min(self.cfg.r, S_grad.numel())
+                    if r_eff >= self.cfg.r:
+                        sqrt_S = torch.sqrt(S_grad[:r_eff].clamp(min=0.0))
+                        delta_B = U_grad[:, :r_eff] * sqrt_S.unsqueeze(0)
+                        delta_A = torch.diag(sqrt_S) @ Vh_grad[:r_eff, :]
+
+                        self.hebb_trace_B.add_(coupling * delta_B.to(self.hebb_trace_B.dtype))
+                        self.hebb_trace_A.add_(coupling * delta_A.to(self.hebb_trace_A.dtype))
+                        svd_success = True
+                except RuntimeError:
+                    svd_success = False
+
+                if not svd_success:
+                    # SVD 失败或秩不足时回退到简单梯度
+                    self.hebb_trace_B.add_(coupling * torch.mm(grad_full, self.hebb_trace_A.t()))
+                    self.hebb_trace_A.add_(coupling * torch.mm(self.hebb_trace_B.t(), grad_full))
+
+
+                # ============================================================
+                # 3. 双向对称更新（g_lm = g_ml 的对称耦合）
+                # ============================================================
+                alignment_grad_rev = cross_alignment * self_flat / torch.sqrt(trace_self)
+                variance_grad_rev = other_flat / torch.sqrt(trace_other)
+                grad_flat_rev = alignment_grad_rev - 0.5 * variance_grad_rev
+                grad_full_rev = grad_flat_rev.view_as(other_full)
+
+                svd_success = False
+                try:
+                    U_grad, S_grad, Vh_grad = torch.linalg.svd(grad_full_rev.float(), full_matrices=False)
+                    r_eff = min(other.cfg.r, S_grad.numel())
+                    if r_eff >= other.cfg.r:
+                        sqrt_S = torch.sqrt(S_grad[:r_eff].clamp(min=0.0))
+                        delta_B_other = U_grad[:, :r_eff] * sqrt_S.unsqueeze(0)
+                        delta_A_other = torch.diag(sqrt_S) @ Vh_grad[:r_eff, :]
+
+                        other.hebb_trace_B.add_(coupling * delta_B_other.to(other.hebb_trace_B.dtype))
+                        other.hebb_trace_A.add_(coupling * delta_A_other.to(other.hebb_trace_A.dtype))
+                        svd_success = True
+                except RuntimeError:
+                    svd_success = False
+
+                if not svd_success:
+                    other.hebb_trace_B.add_(coupling * torch.mm(grad_full_rev, other.hebb_trace_A.t()))
+                    other.hebb_trace_A.add_(coupling * torch.mm(other.hebb_trace_B.t(), grad_full_rev))
+
+
+                # 裁剪防止爆炸
+                self.hebb_trace_B.clamp_(-self.cfg.saturation_limit, self.cfg.saturation_limit)
+                self.hebb_trace_A.clamp_(-self.cfg.saturation_limit, self.cfg.saturation_limit)
+                other.hebb_trace_B.clamp_(-other.cfg.saturation_limit, other.cfg.saturation_limit)
+                other.hebb_trace_A.clamp_(-other.cfg.saturation_limit, other.cfg.saturation_limit)
+
 
 
     
@@ -2124,13 +2320,13 @@ class AeloruLayer(nn.Module):
             if self.state == CognitiveState.EXPLORE:
                 explore_duration = self.step_counter - self._explore_start_step
                 if explore_duration >= self.cfg.explore_steps and conflict_score > self.cfg.red_threshold:
-                    self._transition_state(CognitiveState.RED, conflict_score)
+                    self._transition_state(CognitiveState.RED)
                     self._flush_hebbian()
                     if self.cfg.fisher_mode == 'hierarchical':
                         self._compute_sparse_fisher()
             elif self.state == CognitiveState.RED:
                 if self.step_counter - self._red_enter_step >= self.cfg.red_min_steps:
-                    self._transition_state(CognitiveState.ANCHOR, conflict_score)
+                    self._transition_state(CognitiveState.ANCHOR)
             elif self.state == CognitiveState.ANCHOR:
                 anchor_duration = self.step_counter - self._red_enter_step - self.cfg.red_min_steps
                 if anchor_duration >= self.cfg.anchor_steps:
@@ -2141,14 +2337,14 @@ class AeloruLayer(nn.Module):
                         recent_deltas = self._hgf_delta_buffer[-10:]
                         avg_delta = sum(recent_deltas) / len(recent_deltas)
                         if avg_delta < self.cfg.anchor_converge * 100:  # HGF delta 尺度不同，放宽阈值
-                            self._transition_state(CognitiveState.SOLID, conflict_score)
+                            self._transition_state(CognitiveState.SOLID)
                     elif len(self._anchor_grad_history) >= 10:
                         avg_grad = sum(self._anchor_grad_history[-10:]) / 10
                         if avg_grad < self.cfg.anchor_converge:
-                            self._transition_state(CognitiveState.SOLID, conflict_score)
+                            self._transition_state(CognitiveState.SOLID)
             elif self.state == CognitiveState.SOLID:
                 if self.step_counter >= self._solid_end_step:
-                    self._transition_state(CognitiveState.EXPLORE, conflict_score)
+                    self._transition_state(CognitiveState.EXPLORE)
 
             if old_state != self.state and self.cfg.verbose:
                 print(f"  [Aeloru] State {old_state.value} -> {self.state.value} "
@@ -2253,9 +2449,8 @@ class AeloruLayer(nn.Module):
         entropy_ratio = (entropy / max_entropy).item()
         return 0.6 * fisher_velocity.item() + 0.4 * (1.0 - entropy_ratio)
     
-    def _transition_state(self, new_state: CognitiveState, conflict_score: float):
+    def _transition_state(self, new_state: CognitiveState):
         """认知状态转换与参数重配置"""
-        old_state = self.state
         self.state = new_state
         
         # 修复：状态转换日志改为批量/间隔输出，避免每步 print 同步
@@ -2292,7 +2487,7 @@ class AeloruLayer(nn.Module):
                     avg_delta = sum(self._anchor_grad_history[-10:]) / 10
                     adjusted_converge = self.cfg.anchor_converge * 100  # HGF delta 尺度小，放宽阈值
                     if avg_delta < adjusted_converge:
-                        self._transition_state(CognitiveState.SOLID, conflict_score=0.0)
+                        self._transition_state(CognitiveState.SOLID)
                         return True
             return False
         
@@ -2302,7 +2497,7 @@ class AeloruLayer(nn.Module):
             if len(self._anchor_grad_history) >= 10:
                 avg_grad = sum(self._anchor_grad_history[-10:]) / 10
                 if avg_grad < self.cfg.anchor_converge:
-                    self._transition_state(CognitiveState.SOLID, conflict_score=0.0)
+                    self._transition_state(CognitiveState.SOLID)
                     return True
         return False
     
@@ -2707,14 +2902,11 @@ class AeloruLayer(nn.Module):
                 report['lateral_norm'] = self.lateral_weights.norm().item()
             
             #预测编码诊断
-            if self.cfg.use_predictive_coding and self.C_y_diag is not None:
-                trace = self.C_y_diag.float().sum()
-                trace = trace + self.C_y_U.float().pow(2).sum() if self.C_y_U is not None else trace
-                report['C_y_trace'] = trace.item()
-                # 为了避免大矩阵计算，仅在小规模时评估条件数
-                if self.C_y_diag.shape[0] <= 1024 and self.C_y_U is not None:
-                    C_y_full = torch.diag(self.C_y_diag) + self.C_y_U @ self.C_y_U.t()
-                    report['C_y_cond'] = torch.linalg.cond(C_y_full.float()).item()
+            if self.cfg.use_predictive_coding and self.lowrank_precision is not None:
+                report['C_y_omega'] = self.omega_cy.item()
+                report['C_y_dynamic_lr'] = self.dynamic_lr_cy.item()
+
+
             
             #白化诊断
             if self.cfg.use_online_covariance and self.C_x is not None:
@@ -2762,6 +2954,16 @@ class AeloruLayer(nn.Module):
             'C_y_diag': self.C_y_diag.cpu() if self.C_y_diag is not None else None,
             'C_y_U': self.C_y_U.cpu() if self.C_y_U is not None else None,
             'mu_y': self.mu_y.cpu() if self.mu_y is not None else None,
+            # HGF 修复版 C_y 新增字段
+            'C_y_L': self.C_y_L.cpu() if self.C_y_L is not None else None,
+            'mu_y_prev': self.mu_y_prev.cpu() if self.mu_y_prev is not None else None,
+            'omega_cy': self.omega_cy.cpu() if self.omega_cy is not None else None,
+            'dynamic_lr_cy': self.dynamic_lr_cy.cpu() if self.dynamic_lr_cy is not None else None,
+            # 低秩精度矩阵
+            'lowrank_B_basis': self.lowrank_precision.B_basis.cpu() if self.lowrank_precision is not None else None,
+            'lowrank_C_h': self.lowrank_precision.C_h.cpu() if self.lowrank_precision is not None else None,
+
+
             'mu_x': self.mu_x.cpu() if self.mu_x is not None else None,
             'C_x': self.C_x.cpu() if self.C_x is not None else None,
             'W_whiten': self.W_whiten.cpu() if self.W_whiten is not None else None,
@@ -2860,6 +3062,22 @@ class AeloruLayer(nn.Module):
             self.C_y_U.copy_(checkpoint['C_y_U'].to(self.C_y_U.device))
         if 'mu_y' in checkpoint and checkpoint['mu_y'] is not None and self.mu_y is not None:
             self.mu_y.copy_(checkpoint['mu_y'].to(self.mu_y.device))
+        # HGF 修复版 C_y 新增字段加载
+        if 'C_y_L' in checkpoint and checkpoint['C_y_L'] is not None and self.C_y_L is not None:
+            self.C_y_L.copy_(checkpoint['C_y_L'].to(self.C_y_L.device))
+        if 'mu_y_prev' in checkpoint and checkpoint['mu_y_prev'] is not None and self.mu_y_prev is not None:
+            self.mu_y_prev.copy_(checkpoint['mu_y_prev'].to(self.mu_y_prev.device))
+        if 'omega_cy' in checkpoint and checkpoint['omega_cy'] is not None and self.omega_cy is not None:
+            self.omega_cy.copy_(checkpoint['omega_cy'].to(self.omega_cy.device))
+        if 'dynamic_lr_cy' in checkpoint and checkpoint['dynamic_lr_cy'] is not None and self.dynamic_lr_cy is not None:
+            self.dynamic_lr_cy.copy_(checkpoint['dynamic_lr_cy'].to(self.dynamic_lr_cy.device))
+        # 低秩精度矩阵加载
+        if 'lowrank_B_basis' in checkpoint and checkpoint['lowrank_B_basis'] is not None and self.lowrank_precision is not None:
+            self.lowrank_precision.B_basis.copy_(checkpoint['lowrank_B_basis'].to(self.lowrank_precision.B_basis.device))
+        if 'lowrank_C_h' in checkpoint and checkpoint['lowrank_C_h'] is not None and self.lowrank_precision is not None:
+            self.lowrank_precision.C_h = checkpoint['lowrank_C_h'].to(self.lowrank_precision.B_basis.device)
+
+
         if 'mu_x' in checkpoint and checkpoint['mu_x'] is not None and self.mu_x is not None:
             self.mu_x.copy_(checkpoint['mu_x'].to(self.mu_x.device))
         if 'C_x' in checkpoint and checkpoint['C_x'] is not None and self.C_x is not None:
@@ -2967,6 +3185,69 @@ def inject_aeloru(
     
     # === 强制返回模型 ===
     return model
+
+
+# =============================================================================
+# DLAM 模型级跨层绑定协调器（论文图1： dreaming + LAM 同时运行）
+# =============================================================================
+
+def cross_modal_sleep_step(model: nn.Module) -> None:
+    """
+    模型级别的 DLAM 睡眠步骤。
+
+    论文架构（图1，第2页）：
+    - 所有 Aeloru 层同时执行 dreaming kernel A_l(t_l)
+    - 层间通过 g_lm 对称耦合
+    - 共享的能量景观同时优化
+
+    注意：层内谱滤波 _offline_replay 已在各层 post_step_update 中
+    条件触发；本函数只负责协调跨层绑定，避免重复调用 dreaming。
+
+    Args:
+        model: 包含 AeloruLayer 的任意 nn.Module。
+    """
+    layers = [m for m in model.modules() if isinstance(m, AeloruLayer)]
+    if not layers:
+        return
+
+    # 仅处理处于 pending 状态的层，且每对只处理一次，避免双向更新重复
+    for i in range(len(layers)):
+        if not getattr(layers[i], '_pending_cross_modal', False):
+            continue
+        for j in range(i + 1, len(layers)):
+            layers[i]._cross_modal_binding([layers[j]])
+
+    # 重置所有 pending 标记
+    for layer in layers:
+        layer._pending_cross_modal = False
+
+
+class AeloruModel(nn.Module):
+    """
+    Aeloru 模型级包装器：方便在训练循环中统一调用 DLAM 跨层绑定。
+
+    用法：
+        aeloru_model = AeloruModel(your_transformer_model)
+        # 每个训练步后：
+        aeloru_model.cross_modal_sleep_step()
+    """
+
+    def __init__(self, model: nn.Module):
+        super().__init__()
+        self.model = model
+
+    def forward(self, *args, **kwargs):
+        return self.model(*args, **kwargs)
+
+    def cross_modal_sleep_step(self) -> None:
+        """调用模型级跨层绑定协调器。"""
+        cross_modal_sleep_step(self.model)
+
+
+
+
+
+
 
 
 
@@ -3345,9 +3626,9 @@ def test_aeloru():
     print(f"  原始输出均值: {original_output.mean().item():.6f}")
     print(f"  Aeloru 输出均值: {aeloru_output.mean().item():.6f}")
     print(f"  最大绝对误差: {diff:.10f}")
-    if torch.allclose(layer_full.m_x.float().cpu(), torch.ones(64)*0.5, atol=1e-5) == False :
+    if not torch.allclose(layer_full.m_x.float().cpu(), torch.ones(out_dim) * 0.5, atol=1e-5):
         print(f"m_x 均值: {layer_full.m_x.mean().item():.6f}")
-    if torch.allclose(layer_full.m_y.float().cpu(), torch.ones(128)*0.5, atol=1e-5) == False :
+    if not torch.allclose(layer_full.m_y.float().cpu(), torch.ones(in_dim) * 0.5, atol=1e-5):
         print(f"m_y 均值: {layer_full.m_y.mean().item():.6f}")
     
     # ========== 测试 2: 功能开关消融 ==========
@@ -3472,15 +3753,18 @@ def test_aeloru():
     layer_hf.set_pretrained_weight(torch.randn(out_dim, in_dim, device=device) * 0.02)
     layer_hf.train()
     
-    def print_fisher_stats(tag: str):
-        f = layer_hf.fisher_mask.float()
+    def print_fisher_stats(layer, tag: str):
+        if layer.fisher_mask is None:
+            print(f"  [{tag}] Fisher 掩码未初始化，跳过统计")
+            return
+        f = layer.fisher_mask.float()
         print(f"  [{tag}] Fisher 统计:")
         print(f"    均值: {f.mean().item():.6f}")
         print(f"    方差: {f.var().item():.8f}")
         print(f"    最大值: {f.max().item():.6f}")
         print(f"    最小值: {f.min().item():.6f}")
     
-    print_fisher_stats("冲击前")
+    print_fisher_stats(layer_hf, "冲击前")
     
     fixed_x = torch.randn(batch_size, in_dim, device=device, dtype=AeloruConfig.AMP_DTYPE)
     
@@ -3489,20 +3773,20 @@ def test_aeloru():
         y = layer_hf(fixed_x)
         layer_hf.post_step_update(fixed_x, y, is_correct=True)
     
-    print_fisher_stats("第一次冲击后 (50步)")
+    print_fisher_stats(layer_hf, "第一次冲击后 (50步)")
     
     # 第二次冲击
     for _ in range(50):
         y = layer_hf(fixed_x)
         layer_hf.post_step_update(fixed_x, y, is_correct=True)
     
-    print_fisher_stats("第二次持续冲击后 (100步)")
+    print_fisher_stats(layer_hf, "第二次持续冲击后 (100步)")
     
     if layer_hf.fisher_mask.float().mean().item() == 0:
         print(f"  ⚠️ Fisher 均值为 0，Hebbian 未提升 Fisher")
     else:
         print("  ✅ 测试 3 通过：Hebbian -> Fisher 痕迹沉淀(HGF 闭式)")
-    #测试3 补充使用HGF 闭式更新验证 Hebbian-Fisher 双向联动
+    #测试3 补充使用HGF 闭式更新验证
     print("\n测试 3.1: HGF 闭式更新验证")
     cfg_hf_hgf = AeloruConfig(
         in_features=in_dim, 
@@ -3524,20 +3808,38 @@ def test_aeloru():
     layer_hf_hgf = AeloruLayer(in_dim, out_dim, cfg_hf_hgf).to(device)
     layer_hf_hgf.set_pretrained_weight(torch.randn(out_dim, in_dim, device=device) * 0.02)
     layer_hf_hgf.train()
-    # 第一次冲击
-    for _ in range(50):
-        y = layer_hf_hgf(fixed_x)
-        layer_hf_hgf.post_step_update(fixed_x, y, is_correct=True)
-    
-    print_fisher_stats("第一次冲击后 (50步)")
-    
-    # 第二次冲击
-    for _ in range(50):
-        y = layer_hf_hgf(fixed_x)
-        layer_hf_hgf.post_step_update(fixed_x, y, is_correct=True)
-    
-    print_fisher_stats("第二次持续冲击后 (100步)")
-    
+
+    assert not layer_hf_hgf.cfg.use_fisher, "HGF 闭式更新验证应关闭常规 Fisher"
+    assert getattr(layer_hf_hgf, 'fisher_mask', None) is None, "HGF 闭式更新不应依赖标准 Fisher 掩码"
+
+    x_hgf = fixed_x[:8]
+    y_hgf = torch.randn(x_hgf.size(0), out_dim, device=device, dtype=x_hgf.dtype)
+    A_before = layer_hf_hgf.lora_A.clone()
+    B_before = layer_hf_hgf.lora_B.clone()
+
+    loss = layer_hf_hgf.hgf_closed_form_update(x_hgf, y_hgf, loss_mode='ce')
+    print(f"  HGF 闭式更新损失: {loss.item():.6f}")
+
+    assert hasattr(layer_hf_hgf, '_hgf_delta_buffer') and len(layer_hf_hgf._hgf_delta_buffer) >= 1, "HGF 闭式更新应记录 delta 缓冲"
+    assert layer_hf_hgf._hgf_delta_buffer[-1] > 0, "HGF delta 代理应为正"
+    assert hasattr(layer_hf_hgf, '_hgf_conflict_buffer') and len(layer_hf_hgf._hgf_conflict_buffer) >= 1, "HGF 闭式更新应记录冲突信号"
+    assert layer_hf_hgf._hgf_conflict_buffer[-1] > 0, "HGF 冲突信号应为正"
+
+    with torch.no_grad():
+        lr_effective = layer_hf_hgf._get_effective_lora_lr()
+        h, h_relu, y_pred, effective_B, scale = layer_hf_hgf._hgf_forward_pass(x_hgf)
+        delta, _ = layer_hf_hgf._compute_hgf_delta(y_pred, y_hgf, 'ce')
+        expected_grad_A, expected_grad_B = layer_hf_hgf._compute_hgf_closed_grads(
+            delta, h, h_relu, x_hgf, effective_B, scale
+        )
+        expected_A = A_before - lr_effective * expected_grad_A
+        expected_B = B_before - lr_effective * expected_grad_B
+
+    assert torch.allclose(layer_hf_hgf.lora_A, expected_A, atol=1e-5, rtol=1e-3), "HGF 闭式更新后的 lora_A 与闭式推导不一致"
+    assert torch.allclose(layer_hf_hgf.lora_B, expected_B, atol=1e-5, rtol=1e-3), "HGF 闭式更新后的 lora_B 与闭式推导不一致"
+
+    print("  ✅ 测试 3.1 通过：HGF 闭式更新独立于标准 Fisher，参数更新与闭式推导一致")
+
     # ========== 测试 4: Hong Wen 状态机 ==========
     print(f"\n{'='*70}")
     print("测试 4: Hong Wen 状态机转换(探索:锚定 ~ 100:1)")
@@ -3759,7 +4061,7 @@ def test_aeloru():
         print("测试 8: 保存/加载一致性(含 v2.0 + 三方向字段)")
         print(f"{'='*70}")
 
-        test_path = "/mnt/agents/output/test_aeloru_adapter_waymd.pt"
+        test_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_aeloru_adapter_waymd.pt")
 
         layer_full.train()
         optimizer_test = torch.optim.AdamW(layer_full.get_trainable_params(), lr=cfg_full.LoRA_lr, fused=True)
@@ -3792,11 +4094,14 @@ def test_aeloru():
 
         # 验证 way.md 三方向字段被正确加载
         if cfg_full.use_predictive_coding:
-            assert layer_loaded.C_y_diag is not None, "C_y_diag 应被加载"
-            assert layer_loaded.C_y_U is not None, "C_y_U 应被加载"
+            assert layer_loaded.lowrank_precision is not None, "低秩精度矩阵应被加载"
             assert layer_loaded.mu_y is not None, "mu_y 应被加载"
-            trace = layer_loaded.C_y_diag.float().sum() + layer_loaded.C_y_U.float().pow(2).sum()
+            C_y_full = (layer_loaded.lowrank_precision.B_basis
+                        @ layer_loaded.lowrank_precision.C_h
+                        @ layer_loaded.lowrank_precision.B_basis.t())
+            trace = torch.trace(C_y_full)
             print(f"  C_y trace 加载后: {trace.item():.4f}")
+
         if cfg_full.use_online_covariance:
             assert layer_loaded.C_x is not None, "C_x 应被加载"
             assert layer_loaded.W_whiten is not None, "W_whiten 应被加载"
@@ -3893,7 +4198,7 @@ def test_aeloru():
     layer_vol.train()
     
     lr_history = []
-    for i in range(20):
+    for _ in range(20):
         x_step = torch.randn(batch_size, in_dim, device=device)
         y_target = torch.randn(batch_size, out_dim, device=device)
         y = layer_vol(x_step)
@@ -4059,33 +4364,26 @@ def test_aeloru():
     
     layer_pred.eval()
     with torch.no_grad():
-        # 运行几步 post_step_update 观察 C_y、mu_y 变化
-        C_y_diag_before = layer_pred.C_y_diag.clone()
-        C_y_U_before = layer_pred.C_y_U.clone()
+        # 运行几步 post_step_update 观察 C_h、mu_y 变化
+        C_h_before = layer_pred.lowrank_precision.C_h.clone()
         mu_y_before = layer_pred.mu_y.clone()
+
         for _ in range(10):
             y = layer_pred(x_pred)
             layer_pred.post_step_update(x_pred, y, is_correct=True)
 
     y_eval = layer_pred(x_pred)
-    C_y_diag_diff = (layer_pred.C_y_diag - C_y_diag_before).abs().max().item()
-    C_y_U_diff = (layer_pred.C_y_U - C_y_U_before).abs().max().item()
-    C_y_diff = max(C_y_diag_diff, C_y_U_diff)
+    C_h_diff = (layer_pred.lowrank_precision.C_h - C_h_before).abs().max().item()
+
     mu_y_diff = (layer_pred.mu_y - mu_y_before).abs().max().item()
-    print(f"  C_y 最大变化量: {C_y_diff:.6f} (应>0)")
+    print(f"  C_h 最大变化量: {C_h_diff:.6f} (应>0)")
     print(f"  mu_y 最大变化量: {mu_y_diff:.6f} (应>0)")
     print(f"  mu_y 均值: {layer_pred.mu_y.mean().item():.6f}")
     print(f"  训练/评估输出差异: {(y_train - y_eval).abs().max().item():.6f}")
     
-    assert C_y_diff > 0, "预测编码应更新 C_y"
+    assert C_h_diff > 0, "预测编码应更新低秩协方差核心 C_h"
     assert mu_y_diff > 0, "预测编码应更新 mu_y"
-    print("  ✅ 测试 14 通过：预测编码神经动态正常工作(C_y、mu_y 在线更新)")
-    print(f"  C_y 最大变化量: {C_y_diff:.6f} (应>0)")
-    print(f"  mu_y 均值: {layer_pred.mu_y.mean().item():.6f}")
-    print(f"  训练/评估输出差异: {(y_train - y_eval).abs().max().item():.6f}")
-    
-    assert C_y_diff > 0, "预测编码应更新 C_y"
-    print("  ✅ 测试 14 通过：预测编码神经动态正常工作(C_y 在线更新)")
+    print("  ✅ 测试 14 通过：预测编码神经动态正常工作(C_h、mu_y 在线更新)")
     
     # ========== 测试 15: 源信号域约束 ==========
     print(f"\n{'='*70}")
@@ -4098,7 +4396,7 @@ def test_aeloru():
         ("simplex", (0, 1), lambda y: (y >= -0.01).all() and (y.sum(dim=-1) - 1.0).abs().max() < 0.01),
     ]
     
-    for domain_name, (lo, hi), check_fn in domains:
+    for domain_name, _, check_fn in domains:
         cfg_domain = AeloruConfig(
             in_features=in_dim, out_features=out_dim, r=8, lora_alpha=4.0,
             use_source_domain_constraint=True,
@@ -4219,7 +4517,7 @@ def test_aeloru():
             print(f"    {k}: {v}")
     
     # 验证保存/加载包含所有新字段
-    fusion_path = "/mnt/agents/output/test_aeloru_fusion.pt"
+    fusion_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_aeloru_fusion.pt")
     try:
         layer_fusion.save_adapter(fusion_path)
         layer_fusion_loaded = AeloruLayer(in_dim, out_dim, cfg_fusion).to(device)
@@ -4228,9 +4526,9 @@ def test_aeloru():
         )
         layer_fusion_loaded.load_adapter(fusion_path)
         
-        assert layer_fusion_loaded.C_y_diag is not None, "融合加载后 C_y_diag 应存在"
-        assert layer_fusion_loaded.C_y_U is not None, "融合加载后 C_y_U 应存在"
+        assert layer_fusion_loaded.lowrank_precision is not None, "融合加载后低秩精度矩阵应存在"
         assert layer_fusion_loaded.C_x is not None, "融合加载后 C_x 应存在"
+
         assert layer_fusion_loaded.W_whiten is not None, "融合加载后 W_whiten 应存在"
         print("  融合配置保存/加载: 通过")
     finally:

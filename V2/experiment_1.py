@@ -37,7 +37,7 @@ import numpy as np
 from tqdm import tqdm
 
 warnings.filterwarnings('ignore')
-from aeloru_layer import AeloruConfig, AeloruLayer, inject_aeloru, train_aeloru_step
+from aeloru_layer import AeloruConfig, AeloruLayer, inject_aeloru, train_aeloru_step, cross_modal_sleep_step
 
 import urllib3
 urllib3.disable_warnings()
@@ -363,6 +363,10 @@ def train_and_evaluate(method: str, dataset_cfg: Dict, tokenizer, pad_token_id: 
                             is_correct=is_correct,
                             y_target=None
                         )
+                        
+                        # 模型级 DLAM 跨层绑定： dreaming 与 LAM 同时运行
+                        if aeloru_layers and any(getattr(l.cfg, 'use_cross_modal_binding', False) for l in aeloru_layers):
+                            cross_modal_sleep_step(model)
                 
             else:
                 # 标准方法(LoRA/DoRA/ReLoRA)
