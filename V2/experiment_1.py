@@ -60,8 +60,15 @@ WARMUP_RATIO = 0.1
 WEIGHT_DECAY = 0.01
 SEED = 42
 
-AMP_DTYPE = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-USE_AMP = True
+if torch.cuda.is_available():
+    # 在部分 Windows / PyTorch 组合下，GradScaler 与 bf16 会触发
+    # "_amp_foreach_non_finite_check_and_unscale_cuda" not implemented for 'BFloat16'
+    # 这里优先使用 fp16 作为兼容方案，避免训练直接崩溃。
+    AMP_DTYPE = torch.float16
+    USE_AMP = True
+else:
+    AMP_DTYPE = torch.float32
+    USE_AMP = False
 
 torch.manual_seed(SEED)
 if torch.cuda.is_available():
