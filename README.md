@@ -4,6 +4,8 @@
 
 Beyond Low-Rank: Dynamic Plasticity through Amplitude-Direction Decoupling
 
+paper: [AeloRu: Adaptive Elastic Learning with Orthogonal Robust Units](paper/paper.md)
+
 ---
 
 ## What is AeloRu?
@@ -21,7 +23,7 @@ AeloRu is a research framework for investigating **semantic structures in PEFT w
 | P0 | Hidden state semantic analysis | ✅ Done([Link](https://github.com/jyimu/AeloRu/blob/main/LoRA%20%CE%94W%20Semantic%20Similarity%20Verification%20Experiment%20Report(LoRA%20%CE%94W%20%E8%AF%AD%E4%B9%89%E7%9B%B8%E4%BC%BC%E6%80%A7%E9%AA%8C%E8%AF%81%E5%AE%9E%E9%AA%8C%E6%8A%A5%E5%91%8A).md)) |
 | P1 | HiRA-DoRA fusion implementation | ✅ Done([Link](./V1/README.md)) |
 | P2 | Hebbian-RL hybrid learning | ✅ Done([Link](./V1/README.md)) |
-| P3 | Training on real data & writing paper | 🔄 Doing |
+| P3 | Training on real data & writing paper | 🔄 Doing([Link](paper/paper.md)) |
 | P4 | Asynchronous PEFT architecture | 📋 Planned |
 
 ---

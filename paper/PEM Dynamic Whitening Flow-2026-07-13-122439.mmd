@@ -1,0 +1,89 @@
+flowchart LR
+    %% =============== 全局配置 ===============
+    %%{ init: { 'flowchart': { 'curve': 'basis', 'padding': 20 } } }%%
+
+    %% =============== 样式定义 ===============
+    classDef input     fill:#e3f2fd,stroke:#1565c0,stroke-width:2px,color:#0d47a1
+    classDef process   fill:#e1f5fe,stroke:#0277bd,stroke-width:2px,color:#01579b
+    classDef memory    fill:#fff9c4,stroke:#f9a825,stroke-width:2px,color:#f57f17
+    classDef control   fill:#ffccbc,stroke:#d84315,stroke-width:2px,color:#bf360c
+    classDef output    fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px,color:#1b5e20
+    classDef trace     fill:#fff9c4,stroke:#fbc02d,stroke-width:2px,color:#f57f17,stroke-dasharray:5 5
+    classDef layer     fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#1b5e20,rx:10,ry:10
+
+    %% =============== 主前向流 (横向贯穿) ===============
+    Input(["Input Tensor (x)"]):::input --> Whitening["PEM 动态白化<br/>(可选)"]:::process
+    Whitening --> BaseForward["基座前向传播<br/>y_base = xW₀ + W_acc"]:::process
+    BaseForward --> OutputSum["前向融合<br/>y = y_base + ΔW"]:::process
+    OutputSum --> Lateral["PEM 侧向抑制<br/>(r维特征空间)"]:::process
+    Lateral --> Predictive["预测编码神经动态<br/>(最小化预测误差)"]:::process
+    Predictive --> FinalOutput(["Output (y)"]):::output
+
+    %% =============== 低秩适配分支 (上方子图) ===============
+    subgraph LoRA_Branch ["低秩适配与调制分支"]
+        direction TB
+        A_B["lora_A & lora_B<br/>(Hebbian-Fisher 痕迹)"]:::memory
+        DeltaW["计算增量 ΔW = α/r · B@A"]:::process
+        HiDoRA["Hi-DoRA 幅度调制<br/>(mx, my)"]:::process
+        FisherGate{"Fisher 门控<br/>1/(1+γF)"}:::control
+        Energy{"能量预算约束<br/>||ΔW|| ≤ η||W₀||"}:::control
+
+        A_B --> DeltaW --> HiDoRA --> FisherGate --> Energy
+    end
+
+    Energy --> OutputSum
+
+    %% =============== 后台控制系统 (下方子图) ===============
+    subgraph Control_System ["后台控制系统"]
+        direction TB
+
+        StateMachine["Hong Wen 认知状态机"]:::control
+        Hebbian["Hebbian-Fisher 双向痕迹库"]:::memory
+
+        subgraph DLAM_Core ["DLAM 谱滤波与跨层绑定"]
+            direction TB
+            SleepFilter["谱滤波睡眠<br/>(修剪低重要性痕迹)"]:::control
+
+            subgraph CrossBinding ["跨层异联想绑定协调器"]
+                direction LR
+                Calc["计算 Mattis 磁化强度<br/>mₗ, mₘ"]:::process
+                Align["对齐梯度 ∇ ~ (mₗ - mₘ)"]:::process
+                Update["更新跨层低秩因子<br/>ΔAₗ, ΔBₗ, ΔAₘ, ΔBₘ"]:::process
+                Calc --> Align --> Update
+            end
+
+            SleepFilter --> CrossBinding
+        end
+
+        StateMachine -->|"触发条件：<br/>记忆固化/冲突检测"| DLAM_Core
+        Hebbian -->|"输入痕迹 Σₗ, Σₘ"| CrossBinding
+        CrossBinding -->|"绑定后痕迹"| Hebbian
+        DLAM_Core -->|"谱滤波后因子"| A_B
+    end
+
+    %% =============== 闭环反馈 ===============
+    FinalOutput -.->|"y, x → 状态评估"| StateMachine
+    FinalOutput -.->|"y, x → 痕迹更新"| Hebbian
+
+    %% =============== Aeloru 层痕迹采集 (底部子图) ===============
+    subgraph LayerL ["Aeloru Layer L — Attention 层"]
+        direction TB
+        L1_In[Input xₗ] --> L1_Forward[前向传播] --> L1_Hebb[累积 Hebbian 痕迹] --> Layer1_Trace["Σₗ = Bₗ@Aₗ"]:::trace
+    end
+    style LayerL fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
+
+    subgraph LayerM ["Aeloru Layer M — FFN 层"]
+        direction TB
+        L2_In[Input xₘ] --> L2_Forward[前向传播] --> L2_Hebb[累积 Hebbian 痕迹] --> Layer2_Trace["Σₘ = Bₘ@Aₘ"]:::trace
+    end
+    style LayerM fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px
+
+    %% =============== 跨层痕迹连接 ===============
+    Layer1_Trace -.->|"Σₗ"| Hebbian
+    Layer2_Trace -.->|"Σₘ"| Hebbian
+
+    %% =============== 子图边界样式 ===============
+    style LoRA_Branch       fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px,stroke-dasharray:3 3
+    style Control_System    fill:#fce4ec,stroke:#c2185b,stroke-width:2px,stroke-dasharray:3 3
+    style DLAM_Core         fill:#fff3e0,stroke:#ef6c00,stroke-width:1px
+    style CrossBinding      fill:#fff8e1,stroke:#ffa000,stroke-width:1px
