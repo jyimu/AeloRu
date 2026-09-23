@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aeloru v3.2 · 详图 D6 · PEM 与输入白化</title>
+<style>
+  :root{
+    --f-io:#E3F2FD; --s-io:#1565C0; --t-io:#0D47A1;
+    --f-branch:#F3E5F5; --s-branch:#7B1FA2; --t-branch:#4A148C;
+    --f-pem:#FFF3E0; --s-pem:#EF6C00; --t-pem:#E65100;
+    --f-ctrl:#FFCCBC; --s-ctrl:#D84315; --t-ctrl:#BF360C;
+    --f-sleep:#EDE7F6; --s-sleep:#5E35B1; --t-sleep:#311B92;
+    --f-stat:#E0F7FA; --s-stat:#00838F; --t-stat:#006064;
+    --f-note:#FAFAFA; --s-note:#B0BEC5; --t-note:#455A64;
+    --edge:#333333; --spine:#C5CDD4;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{
+    background:#FFFFFF; color:var(--t-note); padding:14px 16px 20px;
+    font:12px/1.4 "Trebuchet MS","Microsoft YaHei",Verdana,Arial,sans-serif;
+  }
+  .sheet{max-width:1640px;margin:0 auto;}
+  .ttl{font-size:14px;font-weight:bold;color:var(--edge);margin-bottom:4px;}
+  .ttl span{font-weight:normal;font-size:11px;color:var(--t-note);margin-left:8px;}
+
+  /* ---------- 主图：x 分流 → 三条并列纵向分支 ---------- */
+  .map{display:flex;align-items:flex-start;overflow-x:auto;padding:10px 2px 12px;gap:0;}
+  .note-row{font-size:10.5px;color:#8A8A8A;margin:-2px 0 6px;}
+
+  .grp{
+    flex:0 0 auto;border:2px solid;border-radius:8px;padding:6px 8px 9px;
+    display:flex;flex-direction:column;
+  }
+  .gt{text-align:center;font-size:11.5px;font-weight:bold;padding:1px 0 7px;white-space:nowrap;}
+
+  .grp.s-x    {width:120px;background:#EAF3FB;border-color:var(--s-io);}
+  .grp.s-a    {width:216px;background:#FFF8E1;border-color:var(--s-pem);}
+  .grp.s-b    {width:218px;background:#FBE9E7;border-color:var(--s-ctrl);}
+  .grp.s-c    {width:218px;background:#E6F7FA;border-color:var(--s-stat);}
+  .s-x > .gt{color:var(--t-io);} .s-a > .gt{color:var(--t-pem);}
+  .s-b > .gt{color:var(--t-ctrl);} .s-c > .gt{color:var(--t-stat);}
+
+  .nds{display:flex;flex-direction:column;gap:13px;position:relative;}
+  .nd{
+    position:relative;border:2px solid;border-radius:5px;padding:4px 6px;
+    font-size:11.5px;text-align:center;line-height:1.3;overflow-wrap:anywhere;
+  }
+  .nds > .nd:not(:first-child)::before{
+    content:"";position:absolute;left:50%;top:-11px;height:9px;
+    transform:translateX(-50%);border-left:1.5px solid var(--spine);
+  }
+  .nd code{font-family:"Consolas","Courier New",monospace;font-size:11px;}
+  .nd.io{background:var(--f-io);border-color:var(--s-io);color:var(--t-io);}
+  .nd.branch{background:var(--f-branch);border-color:var(--s-branch);color:var(--t-branch);}
+  .nd.pem{background:var(--f-pem);border-color:var(--s-pem);color:var(--t-pem);}
+  .nd.ctrl{background:var(--f-ctrl);border-color:var(--s-ctrl);color:var(--t-ctrl);}
+  .nd.stat{background:var(--f-stat);border-color:var(--s-stat);color:var(--t-stat);}
+
+  .cap{font-size:10px;color:#8A8A8A;text-align:center;padding:1px 6px;line-height:1.35;}
+
+  /* 横向连线 */
+  .link{
+    flex:0 0 56px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;
+  }
+  .link .ln{width:50px;height:0;border-top:3px solid var(--edge);position:relative;}
+  .link .ln::after{
+    content:"";position:absolute;right:-2px;top:-6px;width:0;height:0;
+    border-top:5.5px solid transparent;border-bottom:5.5px solid transparent;border-left:9px solid var(--edge);
+  }
+  .link .lb{font-size:10.5px;color:var(--t-note);white-space:nowrap;text-align:center;}
+
+  /* ---------- 跨分支耦合 / 实测边界（虚线引出） ---------- */
+  .band{margin-top:10px;}
+  .meta{background:var(--f-note);border:1px dashed var(--s-note);border-radius:8px;padding:7px 11px 9px;}
+  .meta > h3{font-size:11.5px;font-weight:bold;color:var(--t-note);margin-bottom:7px;}
+  .item{display:flex;align-items:flex-start;gap:8px;margin-bottom:9px;}
+  .item:last-child{margin-bottom:0;}
+  .item .src{flex:0 0 auto;display:flex;flex-direction:column;align-items:center;gap:3px;width:78px;}
+  .item .src .nd{font-size:10.5px;padding:2px 5px;white-space:nowrap;}
+  .item .arw{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;width:46px;}
+  .item .arw i{width:100%;height:0;border-top:2px dashed var(--edge);position:relative;}
+  .item .arw i::after{
+    content:"";position:absolute;right:-2px;top:-4px;width:0;height:0;
+    border-top:4px solid transparent;border-bottom:4px solid transparent;border-left:7px solid var(--edge);
+  }
+  .item .arw em{font-style:normal;font-size:10px;color:var(--t-note);white-space:nowrap;}
+  .item .wtxt{flex:1;border:1px dashed var(--s-note);border-radius:6px;padding:5px 9px;font-size:11px;color:var(--t-note);line-height:1.45;}
+  .item .wtxt b{color:#BF360C;}
+
+  .foot{margin-top:10px;display:flex;flex-wrap:wrap;gap:10px;}
+  .lg{background:var(--f-note);border:1px dashed var(--s-note);border-radius:8px;padding:7px 11px;display:flex;flex-direction:column;gap:5px;font-size:11px;color:var(--t-note);flex:1 1 280px;}
+  .lg div{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+  .lg i{display:inline-block;width:30px;height:0;border-top:3px solid var(--edge);}
+  .lg .nd{font-size:10.5px;padding:1px 6px;}
+</style>
+</head>
+<body>
+<div class="sheet">
+
+  <div class="ttl">
+    详图 D6 · PEM 与输入白化
+    <span>横向：x 分流 → 三条并列纵向分支（A 低秩 / B 输出空间 / C 白化）；纵向：每分支内部为迭代流程柱　·　虚线 = 实测边界 / 跨分支耦合</span>
+  </div>
+
+  <div class="note-row">x 同时流入 A / B / C 三分支；分支 B（输出空间 PEM）仅 cognitive_model 预设启用，分支 C（白化）默认 whitening_interval=1e9 等效关闭。</div>
+
+  <!-- ============================ 主图 ============================ -->
+  <div class="map">
+
+    <!-- 输入 x -->
+    <div class="grp s-x">
+      <div class="gt">输入</div>
+      <div class="nds">
+        <div class="nd io">输入 x</div>
+      </div>
+    </div>
+
+    <div class="link"><span class="lb">分流</span><i class="ln"></i></div>
+
+    <!-- 分支 A：低秩 PEM（默认路径） -->
+    <div class="grp s-a">
+      <div class="gt">分支 A　PEM 低秩神经动态（M2-④，默认）</div>
+      <div class="nds">
+        <div class="nd pem">h = x·A′ᵀ（r 维，3D 折叠为 2D 迭代）</div>
+        <div class="nd pem">在线统计（no_grad）<br>μ_h ← λ·μ_h+(1−λ)·mean(h)<br>C_hh ← λ·C_hh+(1−λ)·(h̄ᵀh̄)/N　λ=0.9</div>
+        <div class="nd pem">尺度无关归一化 C_n = C_hh/mean(diag(C_hh))<br>必要性：直接 C_hh⁻¹ 在 h 方差小时放大 60 倍</div>
+        <div class="nd pem">eigh(C_n) → 特征值限幅 [1/c_max, c_max]（c_max=5）<br>C_inv = V·diag(1/λ)·Vᵀ，失败回退单位阵</div>
+        <div class="nd pem">快速推断迭代 j=0…ndi−1<br>η_j = max(0.9/(j+1), 0.01)</div>
+        <div class="nd pem">grad_h = λ_lat·(h·W_latᵀ) + w_coef·(h·C_invᵀ − h)<br>侧向抑制(解耦) + 精度加权去相关</div>
+        <div class="nd pem">h ← h − η_j·grad_h</div>
+        <div class="nd pem">出现非有限值？或 ‖Δh‖ &lt; 1e−8·‖h‖？</div>
+        <div class="cap">否 → 回到 A5 继续迭代；收敛 → A10；是 → 丢弃本轮返回原始 h（A9）</div>
+        <div class="nd pem">非有限值：丢弃本轮结果，返回原始 h（安全阀）</div>
+        <div class="nd pem">straight-through 残差接回<br>h ← h + (ND(h) − h.detach())<br>梯度沿恒等回传 lora_A / m_y / p_in</div>
+      </div>
+    </div>
+
+    <div class="link"><span class="lb">并行分支</span><i class="ln"></i></div>
+
+    <!-- 分支 B：输出空间 PEM -->
+    <div class="grp s-b">
+      <div class="gt">分支 B　PEM 输出空间（M1-④，仅 cognitive_model）</div>
+      <div class="nds">
+        <div class="nd ctrl">W_base = W₀+W_acc　y_ke = x·W_baseᵀ（基座预测）</div>
+        <div class="nd ctrl">低秩精度矩阵 Woodbury：C_y = B_basis·C_h·B_basisᵀ+ε·I<br>r×r 核心求逆；退化回退随机基（缺陷 #5）</div>
+        <div class="nd ctrl">迭代 j=0…ndi−1</div>
+        <div class="nd ctrl">grad_y = γ_pred·(y−y_ke) + (C_y⁻¹·ȳ − ȳ)<br>预测校正(γ=100) + 精度加权侧向项</div>
+        <div class="nd ctrl">y ← y − η_j·grad_y → 每步施加源域投影 σ_P（clamp/simplex）</div>
+        <div class="cap">未收敛 → 回到 B3 迭代</div>
+      </div>
+    </div>
+
+    <div class="link"><span class="lb">并行分支</span><i class="ln"></i></div>
+
+    <!-- 分支 C：输入白化 -->
+    <div class="grp s-c">
+      <div class="gt">分支 C　输入动态白化（M1-①）</div>
+      <div class="nds">
+        <div class="nd stat">μ_x ← λ·μ_x+(1−λ)·mean(x)<br>C_x ← λ·C_x+(1−λ)·(x̄x̄ᵀ)（D3-⑦ 维护）</div>
+        <div class="nd stat">step % whitening_interval == 0 ?</div>
+        <div class="cap">是 → C3 刷新白化；否 → 直接 C4</div>
+        <div class="nd stat">SVD(C_x)=USVᵀ → W_whiten = U·diag(1/√(S+1e−5))·Vᵀ（失败则跳过）</div>
+        <div class="nd stat">前向：x ← (x − μ_x)·W_whitenᵀ</div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ============================ 跨分支耦合 ============================ -->
+  <div class="band">
+    <div class="meta">
+      <h3>跨分支耦合（虚线）</h3>
+      <div class="item">
+        <div class="src"><span class="nd stat">C4 白化后 x</span></div>
+        <div class="arw"><em>→</em><i></i></div>
+        <div class="wtxt">白化后的 x 回灌分支 A 的第 ① 步（A1：h = x·A′ᵀ），即输入侧统计先经动态白化再进入低秩神经动态。两分支在 x 上串行衔接。</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================ 实测边界 ============================ -->
+  <div class="band">
+    <div class="meta">
+      <h3>实测边界（虚线引出，来自 paper.md §3.6 / §5.10）</h3>
+
+      <div class="item">
+        <div class="src"><span class="nd ctrl">B5 输出 y</span></div>
+        <div class="arw"><em>缺陷 #3</em><i></i></div>
+        <div class="wtxt"><b>分支 B 实测（v3.1，未低秩化）：</b>单层输出范数 573→0.193（ndi=2）、放大 13×（ndi=1），loss 7.9 vs 3.87；根因 y_ke 与 y 同为基座输出，误差项恒等于 bias 并被 γ_pred=100 放大。→ v3.2 默认改走分支 A；分支 B 仅保留给从零训练场景。</div>
+      </div>
+
+      <div class="item">
+        <div class="src"><span class="nd pem">A10 残差接回</span></div>
+        <div class="arw"><em>§5.10</em><i></i></div>
+        <div class="wtxt"><b>分支 A 判决性实验：</b>低秩化解决“破坏预训练表示”但未使 PEM 转正贡献。ndi=0→2→8 时 corr_abs 0.106→0.263、coup_red+56%，Forgetting+28%、BWT 单调恶化，ACC 基本持平；开环对照（冻结 A）下“选择性”消失。→ PEM 去相关驱动是精度加权（∝C⁻¹），按能量而非按任务。→ llm_tuning() 默认 ndi=0，PEM 定位为从零训练大维度认知组件。</div>
+      </div>
+
+      <div class="item">
+        <div class="src"><span class="nd stat">C4 白化后 x</span></div>
+        <div class="arw"><em>缺陷 #11</em><i></i></div>
+        <div class="wtxt"><b>分支 C 默认关闭：</b>whitening_interval=1e9（等效关闭，W_whiten=I）。预训练 LLM 已有 LayerNorm，输入白化属重复归一化。</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================ 图例 ============================ -->
+  <div class="foot">
+    <div class="lg">
+      <div><i></i> 实线 = 前向 / 数据流；虚线 = 实测边界 / 跨分支耦合</div>
+      <div>
+        <span class="nd pem">分支 A 低秩 PEM</span>
+        <span class="nd ctrl">分支 B 输出空间 PEM</span>
+        <span class="nd stat">分支 C 输入白化</span>
+      </div>
+      <div style="color:var(--t-note)">每分支内部为纵向迭代流程柱（spine 连接）；三分支横向并列，构成横纵结合。</div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

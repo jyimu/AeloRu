@@ -1,0 +1,70 @@
+%% ============================================================================
+%% 详图 D1 · 对应主图模块 M2-②「双一维调制」
+%% 范围：低秩增量的构造、幅值与可塑性两路调制的叠加、工程折叠写法
+%% 不含：PEM 神经动态（→ D6）　门控统计量的来源（→ D2）　约束项（→ D7）
+%% 依据：aeloru_v3.py  forward() / apply_hidora() / apply_plasticity_gate()
+%% 布局：外层 LR 链（横向），每个子框内部 TB（纵向步骤柱），横纵结合，避免大网格
+%% ============================================================================
+%%{ init: { 'flowchart': { 'curve': 'basis', 'nodeSpacing': 18, 'rankSpacing': 58 } } }%%
+flowchart LR
+
+    classDef base fill:#E3F2FD,stroke:#1565C0,stroke-width:2px,color:#0D47A1
+    classDef slow fill:#E8F5E9,stroke:#2E7D32,stroke-width:2px,color:#1B5E20
+    classDef fast fill:#FFECB3,stroke:#F9A825,stroke-width:2px,color:#F57F17
+    classDef fuse fill:#F3E5F5,stroke:#7B1FA2,stroke-width:2px,color:#4A148C
+    classDef note fill:#FAFAFA,stroke:#B0BEC5,stroke-width:1px,color:#455A64,stroke-dasharray:4 4
+    classDef ext  fill:#FFF3E0,stroke:#EF6C00,stroke-width:1px,color:#E65100,stroke-dasharray:4 4
+
+    %% ---------------- 参数与初始化（纵向两步柱） ----------------
+    subgraph INIT ["参数与初始化"]
+        direction TB
+        W0["冻结预训练权重　W₀"]:::base
+        AB["lora_A：kaiming_uniform　lora_B：全零"]:::base
+        MX["m_x = ‖W₀[i,:]‖₂　输出侧幅值（d_out 维）"]:::slow
+        MY["m_y = mean‖W₀[:,j]‖₂　输入侧幅值（d_in 维）"]:::slow
+        W0 --> MX
+        W0 --> MY
+    end
+    INIT --> DW["概念式增量　ΔW = (α/r) · B · A"]:::base
+    AB --> DW
+    DW --> H1
+
+    %% ---------------- 慢通路（纵向：ΔW′ → 解耦性质） ----------------
+    subgraph SLOW ["慢通路　Hi-DoRA 幅值调制（反向传播，语义：该维度“更新多大”）"]
+        direction TB
+        H1["ΔW′ = ( m_x · m_yᵀ ) ⊙ ΔW"]:::slow
+        H2["三重解耦：幅值/方向 · 输入/输出 · 全局/局部<br/>额外参数 d_out + d_in，占全权重 < 0.01%"]:::slow
+        H1 --> H2
+    end
+    MX --> H1
+    MY --> H1
+
+    %% ---------------- 快通路（纵向：ΔW″ → 取值说明） ----------------
+    SLOW --> FAST
+    subgraph FAST ["快通路　可塑性门控（前向统计 + 睡眠，语义：该维度“多容易被改”）"]
+        direction TB
+        G1["ΔW″ = p_out[:] ⊙ ΔW′ ⊙ p_in[:]<br/>两次一维缩放，O(d_out + d_in)，无 d_out × d_in 中间矩阵"]:::fast
+        G2["p_out / p_in 取值与更新见详图 D2"]:::ext
+        G1 --- G2
+    end
+    H2 --> G1
+
+    %% ---------------- 工程折叠（纵向：A′ / B′ → h/Δy） ----------------
+    FAST -->|"数学等价"| FUSE
+    subgraph FUSE ["工程折叠：门控与幅值合并进 A / B，避免物化 ΔW"]
+        direction TB
+        F1["A′ = A ⊙ ( m_y · p_in )　列调制　O(r·d_in)"]:::fuse
+        F2["B′ = B ⊙ ( m_x · p_out )　行调制　O(r·d_out)"]:::fuse
+        F3["h = x · A′ᵀ　→　（PEM 与 WTA，见 D6）　→　Δy = (α/r) · h · B′ᵀ"]:::fuse
+        F1 --> F3
+        F2 --> F3
+    end
+
+    %% ---------------- 收尾说明（纵向） ----------------
+    F3 --> NOTE["为何不能直接用 B′A′ 合成 ΔW<br/>h 在 M2-④⑤ 中被 PEM 神经动态与 WTA 逐样本修改，不再是 x·A′ᵀ 的线性函数，<br/>故前向不存在与 Δy 严格等价的静态 ΔW；门控与幅值只能逐侧折叠进 A / B。<br/>仅在 ReLoRA 合并与正则项计算时回退 ΔW = (α/r)·B·A（见 D7）。"]:::note
+    NOTE --> TBL["两条一维通路的结构同构（对照 Hi-DoRA）<br/>输出侧：m_x（慢，BP） ↔ p_out（快，HGF + 睡眠）<br/>输入侧：m_y（慢，BP） ↔ p_in（快，HGF + 睡眠）<br/>组合：(m_x m_yᵀ) ⊙ ΔW ↔ p_out p_inᵀ ⊙ ΔW′"]:::note
+
+    style SLOW fill:#F1F8E9,stroke:#2E7D32,stroke-width:2px
+    style FAST fill:#FFFDE7,stroke:#F9A825,stroke-width:2px
+    style FUSE fill:#F8F0FC,stroke:#7B1FA2,stroke-width:2px,stroke-dasharray:4 4
+    style INIT fill:#E3F2FD,stroke:#1565C0,stroke-width:1px

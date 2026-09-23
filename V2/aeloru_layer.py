@@ -494,7 +494,7 @@ class LowRankPrecisionMatrix(nn.Module):
             eps = self.epsilon
             Bt_y = torch.matmul(B.t(), y_bar.t())  # (r, batch)
             BtB = torch.matmul(B.t(), B)  # (r, r)
-            C_h_inv = torch.linalg.inv(self.C_h)
+            C_h_inv = torch.linalg.inv(self.C_h.to(torch.float32))
             M = C_h_inv + BtB / eps
             z = torch.linalg.solve(M, Bt_y / eps)
             result = y_bar.t() / eps - torch.matmul(B, z) / eps
@@ -511,7 +511,7 @@ class LowRankPrecisionMatrix(nn.Module):
             条件数
         """
         with torch.no_grad():
-            eigvals, eigvecs = torch.linalg.eigh(self.C_h)
+            eigvals, eigvecs = torch.linalg.eigh(self.C_h.to(torch.float32))
             cond = eigvals[-1] / (eigvals[0] + 1e-10)
             if cond > threshold:
                 min_eig = eigvals[-1] / threshold
@@ -811,7 +811,6 @@ class AeloruLayer(nn.Module):
                 self.out_features, cfg.r, device=cfg.device,
                 basis_update_interval=100, ema_alpha=cfg.lambda_lateral
             )
-            self.register_buffer('C_y_L', None)  # 兼容旧代码
         
             self.register_buffer(
                 'mu_y', 
@@ -835,7 +834,6 @@ class AeloruLayer(nn.Module):
             self.register_buffer('C_y_U', None)
         else:
             self.lowrank_precision = None
-            self.C_y_L = None
             self.mu_y = None
             self.mu_y_prev = None
             self.omega_cy = None
@@ -2180,7 +2178,10 @@ class AeloruLayer(nn.Module):
 
 
                 # 归一化的跨层 Frobenius 内积，对应 Mattis 磁化强度的乘积
+                self_full = self_full.to(torch.float32)
                 trace_self = torch.trace(torch.mm(self_full.t(), self_full))
+
+                other_full = other_full.to(torch.float32)
                 trace_other = torch.trace(torch.mm(other_full.t(), other_full))
 
                 if trace_self < 1e-10 or trace_other < 1e-10:
@@ -2955,7 +2956,6 @@ class AeloruLayer(nn.Module):
             'C_y_U': self.C_y_U.cpu() if self.C_y_U is not None else None,
             'mu_y': self.mu_y.cpu() if self.mu_y is not None else None,
             # HGF 修复版 C_y 新增字段
-            'C_y_L': self.C_y_L.cpu() if self.C_y_L is not None else None,
             'mu_y_prev': self.mu_y_prev.cpu() if self.mu_y_prev is not None else None,
             'omega_cy': self.omega_cy.cpu() if self.omega_cy is not None else None,
             'dynamic_lr_cy': self.dynamic_lr_cy.cpu() if self.dynamic_lr_cy is not None else None,
@@ -3063,8 +3063,6 @@ class AeloruLayer(nn.Module):
         if 'mu_y' in checkpoint and checkpoint['mu_y'] is not None and self.mu_y is not None:
             self.mu_y.copy_(checkpoint['mu_y'].to(self.mu_y.device))
         # HGF 修复版 C_y 新增字段加载
-        if 'C_y_L' in checkpoint and checkpoint['C_y_L'] is not None and self.C_y_L is not None:
-            self.C_y_L.copy_(checkpoint['C_y_L'].to(self.C_y_L.device))
         if 'mu_y_prev' in checkpoint and checkpoint['mu_y_prev'] is not None and self.mu_y_prev is not None:
             self.mu_y_prev.copy_(checkpoint['mu_y_prev'].to(self.mu_y_prev.device))
         if 'omega_cy' in checkpoint and checkpoint['omega_cy'] is not None and self.omega_cy is not None:

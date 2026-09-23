@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aeloru v3.2 · 详图 D5 · DLAM 慢速记忆系统</title>
+<style>
+  :root{
+    --f-io:#E3F2FD; --s-io:#1565C0; --t-io:#0D47A1;
+    --f-main:#E8F5E9; --s-main:#2E7D32; --t-main:#1B5E20;
+    --f-branch:#F3E5F5; --s-branch:#7B1FA2; --t-branch:#4A148C;
+    --f-pem:#FFF3E0; --s-pem:#EF6C00; --t-pem:#E65100;
+    --f-ctrl:#FFCCBC; --s-ctrl:#D84315; --t-ctrl:#BF360C;
+    --f-sleep:#EDE7F6; --s-sleep:#5E35B1; --t-sleep:#311B92;
+    --f-stat:#E0F7FA; --s-stat:#00838F; --t-stat:#006064;
+    --f-loss:#ECEFF1; --s-loss:#546E7A; --t-loss:#263238;
+    --f-note:#FAFAFA; --s-note:#B0BEC5; --t-note:#455A64;
+    --edge:#333333; --spine:#C5CDD4;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{
+    background:#FFFFFF; color:var(--t-loss); padding:14px 16px 20px;
+    font:12px/1.4 "Trebuchet MS","Microsoft YaHei",Verdana,Arial,sans-serif;
+  }
+  .sheet{max-width:1560px;margin:0 auto;}
+  .ttl{font-size:14px;font-weight:bold;color:var(--edge);margin-bottom:4px;}
+  .ttl span{font-weight:normal;font-size:11px;color:var(--t-note);margin-left:8px;}
+
+  /* ---------- 主图：横向阶段链（每阶段为纵向流程柱） ---------- */
+  .map{display:flex;align-items:center;overflow-x:auto;padding:10px 2px 12px;gap:0;}
+
+  .grp{
+    flex:0 0 auto;border:2px solid;border-radius:8px;padding:6px 8px 9px;
+    display:flex;flex-direction:column;
+  }
+  .gt{text-align:center;font-size:11.5px;font-weight:bold;padding:1px 0 7px;white-space:nowrap;}
+
+  /* 阶段配色 */
+  .grp.s-in   {width:182px;background:#F3EDFA;border-color:var(--s-sleep);}
+  .grp.s-stage{width:236px;background:#FBF6FC;border-color:#9C6CC9;}
+  .grp.s-proto{width:236px;background:#F8EBF9;border-color:var(--s-branch);}
+  .grp.s-cross{width:226px;background:#EAF3FB;border-color:var(--s-io);}
+  .grp.s-rel  {width:212px;background:#F1F8E9;border-color:var(--s-main);}
+  .grp.s-note {width:246px;background:#FAFAFA;border-color:var(--s-note);}
+  .s-in > .gt{color:var(--t-sleep);} .s-stage > .gt{color:#6A3FA0;}
+  .s-proto > .gt{color:var(--t-branch);} .s-cross > .gt{color:var(--t-io);}
+  .s-rel > .gt{color:var(--t-main);} .s-note > .gt{color:var(--t-note);}
+
+  /* 纵向节点列 + spine */
+  .nds{display:flex;flex-direction:column;gap:15px;position:relative;}
+  .nd{
+    position:relative;border:2px solid;border-radius:5px;padding:4px 6px;
+    font-size:12px;text-align:center;line-height:1.3;overflow-wrap:anywhere;
+  }
+  .nds > .nd:not(:first-child)::before{
+    content:"";position:absolute;left:50%;top:-12px;height:10px;
+    transform:translateX(-50%);border-left:1.5px solid var(--spine);
+  }
+  .nd code{font-family:"Consolas","Courier New",monospace;font-size:11px;}
+  .nd.io{background:var(--f-io);border-color:var(--s-io);color:var(--t-io);}
+  .nd.main{background:var(--f-main);border-color:var(--s-main);color:var(--t-main);}
+  .nd.branch{background:var(--f-branch);border-color:var(--s-branch);color:var(--t-branch);}
+  .nd.pem{background:var(--f-pem);border-color:var(--s-pem);color:var(--t-pem);}
+  .nd.ctrl{background:var(--f-ctrl);border-color:var(--s-ctrl);color:var(--t-ctrl);}
+  .nd.sleep{background:var(--f-sleep);border-color:var(--s-sleep);color:var(--t-sleep);}
+  .nd.stat{background:var(--f-stat);border-color:var(--s-stat);color:var(--t-stat);}
+  .nd.loss{background:var(--f-loss);border-color:var(--s-loss);color:var(--t-loss);}
+  .nd.note{background:var(--f-note);border-color:var(--s-note);color:var(--t-note);border-style:dashed;}
+
+  /* 竖向子泳道（STAGE 内 ① 在上 ② 在下） */
+  .lane{display:flex;flex-direction:column;align-items:stretch;}
+  .lane .lt{text-align:center;font-size:11px;font-weight:bold;padding:2px 0 6px;}
+  .lt.pem{color:var(--t-pem);} .lt.sleep{color:var(--t-sleep);}
+  .lt.branch{color:var(--t-branch);} .lt.io{color:var(--t-io);}
+  .vlink{align-self:center;display:flex;flex-direction:column;align-items:center;margin:5px 0;}
+  .vlink i{width:0;height:28px;border-left:3px solid var(--edge);position:relative;}
+  .vlink i::after{
+    content:"";position:absolute;left:-5px;bottom:-2px;width:0;height:0;
+    border-left:5px solid transparent;border-right:5px solid transparent;border-top:9px solid var(--edge);
+  }
+
+  /* 横向连线（阶段间） */
+  .link{
+    flex:0 0 56px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:5px;
+  }
+  .link .ln{width:50px;height:0;border-top:3px solid var(--edge);position:relative;}
+  .link .ln::after{
+    content:"";position:absolute;right:-2px;top:-6px;width:0;height:0;
+    border-top:5.5px solid transparent;border-bottom:5.5px solid transparent;border-left:9px solid var(--edge);
+  }
+  .link .lb{font-size:10.5px;color:var(--t-note);white-space:nowrap;text-align:center;}
+
+  /* 底部图例 */
+  .foot{margin-top:10px;display:flex;flex-wrap:wrap;gap:10px;}
+  .meta{background:var(--f-note);border:1px dashed var(--s-note);border-radius:8px;padding:7px 11px 9px;flex:1 1 280px;}
+  .meta > h3{font-size:11.5px;font-weight:bold;color:var(--t-note);margin-bottom:6px;}
+  .lg{display:flex;flex-direction:column;gap:5px;font-size:11px;color:var(--t-note);}
+  .lg div{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+  .lg i{display:inline-block;width:30px;height:0;border-top:3px solid var(--edge);}
+  .lg .nd{font-size:10.5px;padding:1px 6px;}
+</style>
+</head>
+<body>
+<div class="sheet">
+
+  <div class="ttl">
+    详图 D5 · DLAM 慢速记忆系统（M5）
+    <span>横向阶段链：输入痕迹 → ①触发(上)+②谱滤波(下) → ③④原型巩固 → ⑤跨层绑定 → 协同 → 权衡　·　实线 = 数据流</span>
+  </div>
+
+  <!-- ============================ 主图 ============================ -->
+  <div class="map">
+
+    <!-- 输入痕迹 -->
+    <div class="grp s-in">
+      <div class="gt">输入痕迹（低秩 Hebb）</div>
+      <div class="nds">
+        <div class="nd sleep">A_trace (r×d_in)<br>B_trace (d_out×r)<br><span style="font-size:10.5px">与 lora_A/B 分离：ReLoRA 合并时仅衰减 0.5（见 D3-⑩）</span></div>
+        <div class="nd sleep">经验协方差 Σ = A_trace·A_traceᵀ / d_out<br><span style="font-size:10.5px">（r×r，避免 O(d³)）</span></div>
+      </div>
+    </div>
+
+    <div class="link"><span class="lb">Σ → 触发</span><i class="ln"></i></div>
+
+    <!-- 睡眠阶段 ①②：① 在上，② 在下 -->
+    <div class="grp s-stage">
+      <div class="gt">睡眠阶段 ①②</div>
+
+      <div class="lane">
+        <div class="lt pem">① 触发调度（由 D3-⑧ 调用）</div>
+        <div class="nds">
+          <div class="nd pem">cond(Σ) = λ_max / λ_min &gt; θ_sleep(500) ?</div>
+          <div class="nd pem">stored_patterns ≥ 10 ?</div>
+          <div class="nd pem">step − last_sleep ≥ min_steps_between_sleep(1000) ?</div>
+          <div class="nd pem">进入 _offline_replay()</div>
+        </div>
+      </div>
+
+      <div class="vlink"><i></i></div>
+
+      <div class="lane">
+        <div class="lt sleep">② 层内谱滤波（Dreaming Kernel）H_Dream</div>
+        <div class="nds">
+          <div class="nd sleep">模式负载 α_load = stored_patterns / r<br>最优睡眠时长 t_opt = 1/α_load，裁剪 [0.1, 100]</div>
+          <div class="nd sleep">核函数 A(t_opt) = (1+t_opt)·(I+t_opt·Σ)⁻¹<br>奇异回退 pinv</div>
+          <div class="nd sleep">Σ 特征基下 λ 缩放 (1+t)/(1+tλ)，关于 λ 严格递减<br>→ 差分衰减高特征值干扰，保留凝聚态方向</div>
+          <div class="nd sleep">A_trace ← A(t_opt) · A_trace</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="link"><span class="lb">A_trace → 剪枝/原型</span><i class="ln"></i></div>
+
+    <!-- ③④ 原型巩固 -->
+    <div class="grp s-proto">
+      <div class="gt">③④ 弱连接剪枝与原型记忆巩固</div>
+      <div class="nds">
+        <div class="nd branch">③ 弱连接剪枝：abs(A_trace) &lt; θ_prune(1e−6) 置零</div>
+        <div class="nd branch">④ 特征分解 Σ → top-k 主特征向量 V(k×r)<br>k = min(prototype_top_k, r)</div>
+        <div class="nd branch">反投影两条一维重要性<br>imp_in = max|V·A_trace| → d_in<br>imp_out = max|B_trace·Vᵀ| → d_out<br>各自 min-max 归一化 [0, 1]</div>
+        <div class="nd branch">写入 proto_importance_in / _out<br>→ 双一维门控慢速通路（见 D2）</div>
+        <div class="nd branch">stored_patterns 清零、conflict_score 清零<br>开始下一轮记忆积累</div>
+      </div>
+    </div>
+
+    <div class="link"><span class="lb">清零 → 跨层</span><i class="ln"></i></div>
+
+    <!-- ⑤ 跨层异联想绑定 -->
+    <div class="grp s-cross">
+      <div class="gt">⑤ 跨层异联想绑定 H_LAM</div>
+      <div class="nds">
+        <div class="nd io">H_l = B_trace_l·A_trace_l　H_m = B_trace_m·A_trace_m</div>
+        <div class="nd io">对齐度（Mattis 序参量）<br>ρ = tr(H_lᵀH_m) / √(‖H_l‖²·‖H_m‖²)</div>
+        <div class="nd io">梯度 = 对齐项 − 0.5×方差项<br>grad = ρ·H_m/‖H_m‖ − 0.5·H_l/‖H_l‖<br>（方差项防坍缩，与 VICReg 同构）</div>
+        <div class="nd io">薄 SVD 取前 r 奇异分量 → ΔA/ΔB<br>双向对称回写；再做 BCM 饱和裁剪（见 D7）</div>
+        <div class="nd io">协调：仅对 _pending_cross_modal 为真的层执行<br>执行后统一清标志</div>
+      </div>
+    </div>
+
+    <div class="link"><span class="lb">ΔA/ΔB 回写</span><i class="ln"></i></div>
+
+    <!-- 协同 -->
+    <div class="grp s-rel">
+      <div class="gt">与 ReLoRA 协同</div>
+      <div class="nds">
+        <div class="nd main">周期性合并沉淀到 W_acc 的知识<br>相当于 DLAM 已巩固原型<br>为跨层绑定提供稳定锚点（见 D3-⑩）</div>
+      </div>
+    </div>
+
+    <div class="link"><i class="ln"></i></div>
+
+    <!-- 权衡 -->
+    <div class="grp s-note">
+      <div class="gt">开销与权衡</div>
+      <div class="nds">
+        <div class="nd note">全部运算限制在 r 维子空间<br>复杂度 O(r²) ~ O(r·d)<br>睡眠总开销 &lt; 3% 训练时间<br><br>数据–计算权衡：DLAM 相图表明提高 t_opt<br>可在标注稀缺时替代部分额外训练数据</div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ============================ 图例 ============================ -->
+  <div class="foot">
+    <div class="meta">
+      <h3>图例</h3>
+      <div class="lg">
+        <div><i></i> 实线 = 前向数据流</div>
+        <div>
+          <span class="nd sleep">① 触发 / ② 谱滤波</span>
+          <span class="nd branch">③④ 原型</span>
+          <span class="nd io">⑤ 跨层绑定</span>
+          <span class="nd main">协同</span>
+        </div>
+        <div style="color:var(--t-note)">① 位于 ② 正上方，二者共属“睡眠阶段”；其余阶段沿横向推进。</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

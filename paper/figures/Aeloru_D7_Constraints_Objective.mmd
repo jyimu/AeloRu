@@ -1,0 +1,76 @@
+%% ============================================================================
+%% 详图 D7 · 对应主图模块 M6（训练目标与约束）+ M4-③ 的 BCM 上限
+%% 范围：四项硬约束 / 正则的公式、施加时机、数值实现
+%% 不含：门控（→ D2）　调制（→ D1）　状态机（→ D4）　PEM（→ D6）
+%% 依据：aeloru_v3.py  get_ortho_penalty() / get_structure_preservation_loss()
+%%       / apply_energy_budget() / _adaptive_saturation() / _clamp_saturate()
+%% 布局：外层 LR 链（横向：约束①→②→③→④→时机→目标），每子框内部 TB（纵向步骤柱）
+%% ============================================================================
+%%{ init: { 'flowchart': { 'curve': 'basis', 'nodeSpacing': 16, 'rankSpacing': 56 } } }%%
+flowchart LR
+
+    classDef box  fill:#ECEFF1,stroke:#546E7A,stroke-width:2px,color:#263238
+    classDef when fill:#FFF3E0,stroke:#EF6C00,stroke-width:1px,color:#E65100
+    classDef obj  fill:#E8F5E9,stroke:#2E7D32,stroke-width:2px,color:#1B5E20
+    classDef note fill:#FAFAFA,stroke:#B0BEC5,stroke-width:1px,color:#455A64,stroke-dasharray:4 4
+
+    %% ================= 横向链：四项约束 → 施加时机 → 训练目标 =================
+    subgraph O1 ["① 正交惩罚　（引导增量学习互补子空间）"]
+        direction TB
+        O11["ΔW = (α/r) · B · A"]:::box
+        O12["随机投影 P (d_in × 16)，每 diagnostic_interval 步重采样一次<br/>Hutchinson 式估计，避免物化 d_out × d_in 乘积"]:::box
+        O13["overlap = (ΔW · P)ᵀ · (W₀ · P)"]:::box
+        O14["L_ortho = λ · ‖overlap‖_F² · (d_in / 16)"]:::box
+        O15["λ = ortho_lambda = 0.01；ANCHOR 状态提升至 ortho_lambda_anchor = 0.05（见 D4）"]:::box
+        O11 --> O12 --> O13 --> O14 --> O15
+    end
+
+    subgraph O2 ["② SPHeRe 低维结构投影　（防止小 r 下的特征坍缩）"]
+        direction TB
+        O21["S = A · C_x · Aᵀ　（r × r，C_x 截断梯度，仅作统计量）"]:::box
+        O22["尺度不变归一化：S_n = S · r / tr(S)　（tr 取 detach，避免梯度穿过归一化系数）"]:::box
+        O23["L_sphere = λ_s · ‖ S_n − I ‖²　（λ_s = sphere_lambda = 0.01）<br/>tr(S) 过小时直接返回 0"]:::box
+        O24["语义：约束 r 个低秩方向在输入度量下正交且能量均衡"]:::box
+        O21 --> O22 --> O23 --> O24
+    end
+
+    subgraph O3 ["③ 能量预算硬约束　（防止增量喧宾夺主）"]
+        direction TB
+        O31["fp32 精确范数：‖ΔW‖_F = (α/r) · sqrt( tr( (BᵀB) · (AAᵀ) ) )<br/>不用 bf16 相减，否则量化噪声会让结果失真（缺陷 #12）"]:::box
+        O32["上限 max = η · ‖W₀‖_F　（η = energy_eta = 0.15）"]:::box
+        O33["若 ‖ΔW‖_F > max：ΔW ← ΔW · ( max / ‖ΔW‖_F )"]:::box
+        O31 --> O32 --> O33
+    end
+
+    subgraph O4 ["④ BCM 自适应饱和上限　（替代固定 saturation_limit）"]
+        direction TB
+        O41["输出侧阈值 θ_out = running_var　（来自主图 M1-⑧）"]:::box
+        O42["输入侧阈值 θ_in = diag(C_x) + μ_x²　（来自 D3-⑦）"]:::box
+        O43["cap = saturation_limit / ( 1 + bcm_gain · θ / mean(θ) )<br/>活动越高的维度，有效饱和上限越紧"]:::box
+        O44["施加点：D3-③ 的 Hebbian flush 裁剪 ±cap；D5 跨层绑定后的痕迹裁剪"]:::box
+        O41 --> O43
+        O42 --> O43
+        O43 --> O44
+    end
+
+    subgraph W ["施加时机"]
+        direction TB
+        W1["L_ortho + L_sphere：每步进入训练目标，参与反向传播"]:::when
+        W2["能量预算：仅在 ReLoRA 合并（D3-⑩）与 compute_weights() 合成权重时施加，前向不施加"]:::when
+        W3["BCM cap：每次 Hebbian flush 与跨层绑定后施加"]:::when
+    end
+
+    OBJ["L = L_task + L_ortho + L_sphere<br/>反向传播目标：lora_A / lora_B / m_x / m_y<br/>（W₀ 与 W_acc 冻结，不接收梯度）"]:::obj
+    NOTE["四项约束的分工<br/>· 正交惩罚与 SPHeRe 是软约束（进损失，靠梯度生效）<br/>· 能量预算与 BCM 上限是硬约束（直接缩放 / 裁剪，不依赖优化器）<br/>· 复杂度：正交惩罚 O(k·d²) 经随机投影降为 O(k·d·16)；SPHeRe 仅 O(r²·d_in)"]:::note
+
+    O1 --> O2 --> O3 --> O4 --> W --> OBJ --> NOTE
+    O15 -.-> W1
+    O24 -.-> W1
+    O33 -.-> W2
+    O44 -.-> W3
+
+    style O1 fill:#F5F7F8,stroke:#546E7A,stroke-width:2px
+    style O2 fill:#F5F7F8,stroke:#546E7A,stroke-width:2px
+    style O3 fill:#F5F7F8,stroke:#546E7A,stroke-width:2px
+    style O4 fill:#F5F7F8,stroke:#546E7A,stroke-width:2px
+    style W  fill:#FFF8E1,stroke:#FFA000,stroke-width:1px,stroke-dasharray:4 4

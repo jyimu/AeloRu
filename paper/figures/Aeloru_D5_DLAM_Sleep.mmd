@@ -1,0 +1,81 @@
+%% ============================================================================
+%% 详图 D5 · 对应主图模块 M5（DLAM 慢速记忆系统）
+%% 范围：睡眠触发、层内谱滤波核、弱连接剪枝、原型记忆、跨层异联想绑定
+%% 不含：proto 如何进入门控（→ D2）　睡眠在后处理中的位置（→ D3-⑧）
+%% 依据：aeloru_v3.py  should_sleep() / _offline_replay() / _extract_prototypes()
+%%       / _cross_modal_binding() / cross_modal_sleep_step()
+%% 布局：外层 LR 链（横向阶段）；① 触发 与 ② 谱滤波 置于同一竖向容器内（① 在 ② 正上方）
+%% 注意：标签文本内一律使用全角括号（）［］，避免被 Mermaid 词法分析误判为节点形状括号
+%% ============================================================================
+%%{ init: { 'flowchart': { 'curve': 'basis', 'nodeSpacing': 16, 'rankSpacing': 56 } } }%%
+flowchart LR
+
+    classDef trig  fill:#FFF3E0,stroke:#EF6C00,stroke-width:2px,color:#E65100
+    classDef dream fill:#EDE7F6,stroke:#5E35B1,stroke-width:2px,color:#311B92
+    classDef proto fill:#E1BEE7,stroke:#8E24AA,stroke-width:2px,color:#4A148C
+    classDef cross fill:#E3F2FD,stroke:#1565C0,stroke-width:2px,color:#0D47A1
+    classDef merge fill:#E8F5E9,stroke:#2E7D32,stroke-width:2px,color:#1B5E20
+    classDef note  fill:#FAFAFA,stroke:#B0BEC5,stroke-width:1px,color:#455A64,stroke-dasharray:4 4
+
+    %% ================= 输入痕迹 =================
+    TRACE["低秩 Hebb 痕迹　A_trace（r×d_in）　B_trace（d_out×r）<br/>与 lora_A / lora_B 分离：ReLoRA 合并时不被清零，仅衰减 0.5（见 D3-⑩）"]:::dream
+    SIG["经验协方差　Σ = A_trace · A_traceᵀ / d_out（r×r，避免 O（d³） 开销）"]:::dream
+    TRACE --> SIG
+
+    %% ================= ① 触发 与 ② 谱滤波：竖向容器（① 在 ② 正上方），整体仍横向 =================
+    subgraph STAGE ["睡眠阶段 ①②"]
+        direction TB
+        subgraph TRIG ["① 触发调度：条件触发 + 最小间隔（由 D3-⑧ 调用）"]
+            direction TB
+            T1{"cond（Σ） = λ_max / λ_min > θ_sleep（500） ?"}:::trig
+            T2{"stored_patterns ≥ 10 ?"}:::trig
+            T3{"step − last_sleep ≥ min_steps_between_sleep（1000） ?"}:::trig
+            GO["进入 _offline_replay（）"]:::trig
+            T1 --> T2 --> T3 --> GO
+        end
+
+        subgraph DREAM ["② 层内谱滤波（Dreaming Kernel）H_Dream"]
+            direction TB
+            K1["模式负载 α_load = stored_patterns / r<br/>最优睡眠时长 t_opt = 1 / α_load，裁剪到 ［0.1, 100］"]:::dream
+            K2["核函数 A（t_opt） = （1 + t_opt） · （I + t_opt·Σ）⁻¹<br/>奇异时回退 pinv"]:::dream
+            K3["在 Σ 的特征基下，特征值 λ 的缩放为 （1+t）/（1+tλ）<br/>关于 λ 严格递减 → 差分衰减高特征值干扰模式，保留凝聚态信号方向"]:::dream
+            K4["A_trace ← A（t_opt） · A_trace"]:::dream
+            K1 --> K2 --> K3 --> K4
+        end
+    end
+
+    %% ================= ③④ / ⑤ 维持横向链 =================
+    subgraph PROTOM ["③④ 弱连接剪枝与原型记忆巩固（谱滤波之后再提取）"]
+        direction TB
+        PR["③ 弱连接剪枝：abs（A_trace） < θ_prune（1e−6） 置零"]:::proto
+        PT1["④ 特征分解 Σ → 取 top-k 主特征向量 V（k×r），k = min（prototype_top_k, r）"]:::proto
+        PT2["反投影为两条一维重要性<br/>imp_in = max abs（V·A_trace） → d_in<br/>imp_out = max abs（B_trace·Vᵀ） → d_out<br/>各自 min-max 归一化到 ［0,1］"]:::proto
+        PT3["写入 proto_importance_in / _out<br/>进入双一维门控的慢速通路（见 D2）"]:::proto
+        RST["stored_patterns 清零、conflict_score 清零，开始下一轮记忆积累"]:::proto
+        PR --> PT1 --> PT2 --> PT3 --> RST
+    end
+
+    subgraph CROSS ["⑤ 跨层异联想绑定 H_LAM（模型级 cross_modal_sleep_step 统一调度）"]
+        direction TB
+        C1["H_l = B_trace_l · A_trace_l　　H_m = B_trace_m · A_trace_m"]:::cross
+        C2["对齐度（Mattis 序参量）<br/>ρ = tr（H_lᵀ H_m） / sqrt（ ‖H_l‖² · ‖H_m‖² ）"]:::cross
+        C3["梯度 = 对齐项 − 0.5 × 方差项<br/>grad = ρ · H_m / ‖H_m‖ − 0.5 · H_l / ‖H_l‖<br/>（方差项防止追求同步时坍塌到平凡解，与 VICReg 同构）"]:::cross
+        C4["薄 SVD 取前 r 个奇异分量 → ΔA / ΔB，双向对称回写两侧痕迹<br/>再做 BCM 饱和裁剪（上限公式见 D7）"]:::cross
+        C5["协调：仅对 _pending_cross_modal 为真的层执行，执行后统一清标志"]:::cross
+        C1 --> C2 --> C3 --> C4 --> C5
+    end
+
+    REL["与 ReLoRA 的协同：周期性合并沉淀到 W_acc 的知识<br/>相当于 DLAM 中“已巩固原型”，为跨层绑定提供稳定锚点（见 D3-⑩）"]:::merge
+    NOTE["开销与权衡<br/>全部运算限制在 r 维子空间，复杂度 O（r²） ~ O（r·d），睡眠阶段总开销 < 3% 训练时间<br/>数据–计算权衡：DLAM 相图表明提高 t_opt 可在标注稀缺时替代部分额外训练数据"]:::note
+
+    SIG --> T1
+    GO --> K1
+    K4 --> PR
+    RST --> C5
+    C5 --> REL --> NOTE
+
+    style STAGE fill:none,stroke:none,stroke-width:0px
+    style TRIG  fill:#FFF8E1,stroke:#EF6C00,stroke-width:2px
+    style DREAM fill:#F3EDFA,stroke:#5E35B1,stroke-width:2px
+    style PROTOM fill:#F8EBF9,stroke:#8E24AA,stroke-width:2px
+    style CROSS fill:#E3F2FD,stroke:#1565C0,stroke-width:2px

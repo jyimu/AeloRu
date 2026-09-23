@@ -1,0 +1,18 @@
+{
+  "seeds": "0,1,2,3,4",
+  "conds": "pem-off,pem-1,pem-3,pem-10,pem-10-w05,hardwhite",
+  "energy": "matched,mismatched",
+  "steps": 400,
+  "bs": 256,
+  "lr": 0.001,
+  "recon": 1.0,
+  "rho": 0.9,
+  "n_train": 8192,
+  "n_eval": 2048,
+  "lateral": false,
+  "fix_a": false,
+  "probe": false,
+  "quick": false,
+  "device": "cuda",
+  "out": ""
+}

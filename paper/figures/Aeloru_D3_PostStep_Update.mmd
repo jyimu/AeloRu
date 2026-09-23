@@ -1,0 +1,97 @@
+%% ============================================================================
+%% 详图 D3 · 对应主图模块 M4（post_step_update 的完整十步时序）
+%% 范围：每个子步骤的输入、公式、副作用
+%% 不含：门控公式（→ D2）　状态机转移条件（→ D4）　谱滤波内部（→ D5）
+%%       白化刷新（→ D6）　BCM 上限与能量预算公式（→ D7）
+%% 依据：aeloru_v3.py  post_step_update() 及各被调函数
+%% 布局：每个步骤 = 一个纵向块（标题为块头，内容竖向排列其下），十块由上到下串联
+%% 压缩：每个子图内多节点链合并为单节点（<br/> 换行），图形数控制在 62 以内
+%% ============================================================================
+%%{ init: { 'flowchart': { 'curve': 'basis', 'nodeSpacing': 12, 'rankSpacing': 40 } } }%%
+flowchart LR
+
+    classDef ctrl fill:#FFCCBC,stroke:#D84315,stroke-width:2px,color:#BF360C
+    classDef det  fill:#FDEEE9,stroke:#E2957A,stroke-width:1px,color:#8A3B22
+    classDef ext  fill:#FFF3E0,stroke:#EF6C00,stroke-width:1px,color:#E65100,stroke-dasharray:4 4
+    classDef note fill:#FAFAFA,stroke:#B0BEC5,stroke-width:1px,color:#455A64,stroke-dasharray:4 4
+    classDef step fill:#FBE9E7,stroke:#D84315,stroke-width:1.5px
+
+    IN(["每步：forward → backward → optimizer.step 之后调用"]):::ctrl
+
+    subgraph SEQ ["post_step_update(x, y, is_correct, y_target, global_signal)　完整十步时序"]
+        direction TB
+
+        subgraph S1 ["① GHL 全局方向注入"]
+            direction TB
+            d1["外部传 global_signal 时直接注入；否则 observe_global_loss(loss)<br/>rel = (prev_loss − cur_loss) / (|prev_loss| + ε)<br/>s = clamp(rel × ghl_loss_gain, −1, 1)<br/>global_direction ← α·global_direction + (1−α)·s（α=0.9）"]:::det
+        end
+
+        subgraph S2 ["② Hebbian 累积"]
+            direction TB
+            d2["累加器 acc_A / acc_B += dA / dB，计数 += 1（更新量见 D2）<br/>记录 _last_hebbian_mag（flush 清零前采样）→ 缓冲写入见 D4"]:::det
+        end
+
+        subgraph S3 ["③ flush 固化（计数 ≥ hebbian_accum_steps）"]
+            direction TB
+            d3["a. 衰减：Δ ← Δ × hebbian_decay^count（若已有影子增量）<br/>b. STDP 噪声：σ = ref × ratio，ref = 0.5·(mean|acc_B| + mean|acc_A|)<br/>　ratio = base × (0.5 + e^ω) × (1 + conflict_n) × 状态系数（上限 hebbian_noise_max_ratio）<br/>c. 累加：Δ ← Δ + 噪声 + acc<br/>d. BCM 自适应饱和裁剪 ±cap（公式见 D7）<br/>e. 写入 _hebbian_delta_A/B，pending_apply=True；hebb_trace+=|acc|，stored_patterns+=1，累加器清零"]:::det
+        end
+
+        subgraph S4 ["④ 侧向连接更新"]
+            direction TB
+            d4["h̄ = Bᵀ · mean(y)<br/>W_lat ← (1 − lateral_decay)·W_lat + lateral_lr·(h̄ h̄ᵀ)，对角强制置 0"]:::det
+        end
+
+        subgraph S5 ["⑤ HGF 波动率 → 动态学习率"]
+            direction TB
+            d5["e = 有 y_target 取 mean|mean(y)−mean(y_target)|，否则取与上一步均值之差<br/>ω ← ω + volatility_lr × (e² − e^ω)，裁剪到 [−5, 5]<br/>dynamic_lr = 1 / clamp(e^ω, 0.1, 10)；η_eff = η₀ × dynamic_lr（另路 ω_cy 驱动 μ_y 步长）"]:::det
+        end
+
+        subgraph S6 ["⑥ 冲突检测 → 状态机（每 50 步）"]
+            direction TB
+            d6["C = 5 × std(buf) / mean(buf)，buf = 最近 50 条 Hebbian 幅度；转移条件见 D4"]:::det
+        end
+
+        subgraph S7 ["⑦ 在线统计"]
+            direction TB
+            d7["μ_y 自适应 EMA（步长由 ω_cy 调制）；低秩精度矩阵 update(B, y) + 谱滤波（cond > 100）<br/>μ_x、C_x 的 EMA：C_x ← λ·C_x + (1−λ)·x̄x̄ᵀ；每 whitening_interval 步 SVD(C_x) 刷新 W_whiten（见 D6）"]:::det
+        end
+
+        subgraph S8 ["⑧ 睡眠判定"]
+            direction TB
+            d8["cond(Σ) > θ_sleep 且 stored ≥ 10 且间隔 ≥ N_min → _offline_replay()（见 D5）"]:::det
+        end
+
+        subgraph S9 ["⑨ 刷新双一维门控"]
+            direction TB
+            d9["刷新 p_out / p_in（公式见 D2）"]:::det
+        end
+
+        subgraph S10 ["⑩ ReLoRA 合并（step_counter ≥ merge_every）"]
+            direction TB
+            d10["W_acc ← W_acc + ΔW（Hi-DoRA 调制 + 门控 + 能量预算，见 D7）<br/>重置 A / B，m_x / m_y 归 1，hebb_trace × 0.5，清空优化器动量<br/>返回 merged = True（调用方不再自增 step）"]:::det
+        end
+
+        S1 --> S2 --> S3 --> S4 --> S5 --> S6 --> S7 --> S8 --> S9 --> S10
+    end
+
+    OUT(["返回 merged：外部据此决定是否跳过 step_counter++ 并重建优化器"]):::ctrl
+
+    IN --> S1
+    S10 --> OUT
+
+    %% 与外部模块的接口（虚线，指向对应步骤块）
+    S2 -.->|"参数"| EXT1["D2：Hebbian 更新量与门控"]:::ext
+    S3 -.->|"饱和上限"| EXT2["D7：BCM cap"]:::ext
+    S3 -.->|"影子增量"| EXT3["主图 M1-⑦：下一步前向生效"]:::ext
+    S3 -.->|"stored_patterns"| S8
+    S5 -.->|"η_eff"| EXT4["D2：hebbian_lr × dynamic_lr"]:::ext
+    S6 -.->|"状态"| EXT5["D4：GHL 权重 / 噪声尺度 / λ_ortho"]:::ext
+    S7 -.->|"μ_x, C_x, W_whiten"| EXT6["D6：输入白化"]:::ext
+    S10 -.->|"能量预算"| EXT7["D7：‖ΔW‖_F ≤ η‖W₀‖_F"]:::ext
+
+    NOTE["实现要点<br/>· 冲突缓冲在 v3.2 之前从未被写入（缺陷 #7），导致状态机只能靠固定步数切换；<br/>　现在 _last_hebbian_mag 在 flush 之前采样并写入缓冲，检测与锚定收敛才真正生效<br/>· 本函数整体在 autocast 关闭下执行，统计量一律用 fp32 累加"]:::note
+
+    OUT --> NOTE
+
+    class S1,S2,S3,S4,S5,S6,S7,S8,S9,S10 step;
+    style SEQ fill:#FBE9E7,stroke:#D84315,stroke-width:2px

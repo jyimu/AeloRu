@@ -1,0 +1,36 @@
+ex3 B: coupling decomposition | tasks=['sst2', 'mrpc', 'qnli', 'rte', 'cola'] | steps=250 | r=8 | layers=4
+[lora] start
+    [lora] after sst2: corr_abs=0.1566  useful_corr=0.0513  useless_corr=0.1053  coup_red=0.0109  coup_func=0.1458  gamma_mean=0.8244
+    [lora] after mrpc: corr_abs=0.1964  useful_corr=0.0609  useless_corr=0.1355  coup_red=0.0183  coup_func=0.1780  gamma_mean=0.8192
+    [lora] after qnli: corr_abs=0.1875  useful_corr=0.0521  useless_corr=0.1354  coup_red=0.0207  coup_func=0.1668  gamma_mean=0.7020
+    [lora] after rte: corr_abs=0.2139  useful_corr=0.0408  useless_corr=0.1731  coup_red=0.0301  coup_func=0.1838  gamma_mean=0.6589
+    [lora] after cola: corr_abs=0.3070  useful_corr=0.0535  useless_corr=0.2535  coup_red=0.0409  coup_func=0.2661  gamma_mean=0.6761
+[lora] ACC=0.5857 BWT=+0.0085 Forgetting=0.0055 params=59136
+[aeloru-nopem] start
+    [aeloru-nopem] after sst2: corr_abs=0.1047  useful_corr=0.0303  useless_corr=0.0744  coup_red=0.0408  coup_func=0.0639  gamma_mean=0.0403
+    [aeloru-nopem] after mrpc: corr_abs=0.0987  useful_corr=0.0194  useless_corr=0.0792  coup_red=0.0247  coup_func=0.0740  gamma_mean=0.0201
+    [aeloru-nopem] after qnli: corr_abs=0.1029  useful_corr=0.0159  useless_corr=0.0870  coup_red=0.0384  coup_func=0.0646  gamma_mean=0.0115
+    [aeloru-nopem] after rte: corr_abs=0.0999  useful_corr=0.0110  useless_corr=0.0889  coup_red=0.0286  coup_func=0.0713  gamma_mean=0.0371
+    [aeloru-nopem] after cola: corr_abs=0.1055  useful_corr=0.0353  useless_corr=0.0702  coup_red=0.0337  coup_func=0.0718  gamma_mean=0.1121
+[aeloru-nopem] ACC=0.5665 BWT=-0.0003 Forgetting=0.0150 params=66304
+[aeloru] start
+    [aeloru] after sst2: corr_abs=0.1300  useful_corr=0.0384  useless_corr=0.0916  coup_red=0.0482  coup_func=0.0818  gamma_mean=0.0445
+    [aeloru] after mrpc: corr_abs=0.1181  useful_corr=0.0241  useless_corr=0.0940  coup_red=0.0342  coup_func=0.0839  gamma_mean=0.0212
+    [aeloru] after qnli: corr_abs=0.1234  useful_corr=0.0213  useless_corr=0.1021  coup_red=0.0488  coup_func=0.0746  gamma_mean=0.0130
+    [aeloru] after rte: corr_abs=0.1213  useful_corr=0.0132  useless_corr=0.1081  coup_red=0.0317  coup_func=0.0896  gamma_mean=0.0404
+    [aeloru] after cola: corr_abs=0.1332  useful_corr=0.0468  useless_corr=0.0864  coup_red=0.0372  coup_func=0.0960  gamma_mean=0.1364
+[aeloru] ACC=0.5672 BWT=-0.0011 Forgetting=0.0171 params=66304
+[aeloru-pem8] start
+    [aeloru-pem8] after sst2: corr_abs=0.1497  useful_corr=0.0424  useless_corr=0.1073  coup_red=0.0519  coup_func=0.0978  gamma_mean=0.0461
+    [aeloru-pem8] after mrpc: corr_abs=0.1364  useful_corr=0.0261  useless_corr=0.1103  coup_red=0.0404  coup_func=0.0960  gamma_mean=0.0239
+    [aeloru-pem8] after qnli: corr_abs=0.1438  useful_corr=0.0222  useless_corr=0.1216  coup_red=0.0569  coup_func=0.0869  gamma_mean=0.0144
+    [aeloru-pem8] after rte: corr_abs=0.1412  useful_corr=0.0144  useless_corr=0.1268  coup_red=0.0377  coup_func=0.1035  gamma_mean=0.0447
+    [aeloru-pem8] after cola: corr_abs=0.1535  useful_corr=0.0510  useless_corr=0.1025  coup_red=0.0391  coup_func=0.1144  gamma_mean=0.1382
+[aeloru-pem8] ACC=0.5658 BWT=-0.0039 Forgetting=0.0186 params=66304
+[aeloru-pem8-w05] start
+    [aeloru-pem8-w05] after sst2: corr_abs=0.2480  useful_corr=0.0393  useless_corr=0.2087  coup_red=0.0806  coup_func=0.1673  gamma_mean=0.0735
+    [aeloru-pem8-w05] after mrpc: corr_abs=0.2533  useful_corr=0.0415  useless_corr=0.2118  coup_red=0.0800  coup_func=0.1732  gamma_mean=0.0360
+    [aeloru-pem8-w05] after qnli: corr_abs=0.2655  useful_corr=0.0225  useless_corr=0.2430  coup_red=0.0860  coup_func=0.1795  gamma_mean=0.0220
+    [aeloru-pem8-w05] after rte: corr_abs=0.2674  useful_corr=0.0159  useless_corr=0.2515  coup_red=0.0723  coup_func=0.1951  gamma_mean=0.0705
+    [aeloru-pem8-w05] after cola: corr_abs=0.2625  useful_corr=0.0934  useless_corr=0.1691  coup_red=0.0525  coup_func=0.2100  gamma_mean=0.2098
+[aeloru-pem8-w05] ACC=0.5659 BWT=-0.0045 Forgetting=0.0192 params=66304

@@ -1,0 +1,48 @@
+
+=== lora ===
+            sst2    mrpc    qnli     rte    cola
+   sst2   0.7200     n/a     n/a     n/a     n/a
+   mrpc   0.6033  0.6433     n/a     n/a     n/a
+   qnli   0.6200  0.5733  0.6167     n/a     n/a
+    rte   0.5467  0.5200  0.6033  0.5668     n/a
+   cola   0.4900  0.6333  0.6500  0.5379  0.6767
+
+=== aeloru ===
+            sst2    mrpc    qnli     rte    cola
+   sst2   0.6300     n/a     n/a     n/a     n/a
+   mrpc   0.5733  0.6167     n/a     n/a     n/a
+   qnli   0.5667  0.5933  0.5433     n/a     n/a
+    rte   0.5700  0.5967  0.5200  0.4910     n/a
+   cola   0.5600  0.6233  0.5633  0.5090  0.6300
+
+=== aeloru-nopem ===
+            sst2    mrpc    qnli     rte    cola
+   sst2   0.6267     n/a     n/a     n/a     n/a
+   mrpc   0.5667  0.6167     n/a     n/a     n/a
+   qnli   0.5567  0.5933  0.5367     n/a     n/a
+    rte   0.5700  0.5967  0.5233  0.4874     n/a
+   cola   0.5567  0.6133  0.5600  0.5199  0.6300
+
+=== aeloru-nowta ===
+            sst2    mrpc    qnli     rte    cola
+   sst2   0.6467     n/a     n/a     n/a     n/a
+   mrpc   0.5700  0.6233     n/a     n/a     n/a
+   qnli   0.5767  0.6033  0.5433     n/a     n/a
+    rte   0.5633  0.5933  0.5200  0.4982     n/a
+   cola   0.5700  0.6200  0.5633  0.5199  0.6233
+
+=== aeloru-nosphere ===
+            sst2    mrpc    qnli     rte    cola
+   sst2   0.6467     n/a     n/a     n/a     n/a
+   mrpc   0.5667  0.6233     n/a     n/a     n/a
+   qnli   0.5700  0.5867  0.5433     n/a     n/a
+    rte   0.5700  0.6000  0.5200  0.4874     n/a
+   cola   0.5600  0.6267  0.5600  0.5162  0.6267
+
+=== aeloru-noortho ===
+            sst2    mrpc    qnli     rte    cola
+   sst2   0.6400     n/a     n/a     n/a     n/a
+   mrpc   0.5667  0.6233     n/a     n/a     n/a
+   qnli   0.5800  0.5733  0.5367     n/a     n/a
+    rte   0.5633  0.6033  0.5300  0.4910     n/a
+   cola   0.5533  0.6167  0.5833  0.5162  0.6400

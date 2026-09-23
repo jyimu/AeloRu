@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Aeloru v3.2 · 主流程总览图</title>
+<style>
+  /* ===== 配色与 aeloru_haed_map.mmd 的 classDef / style 完全一致 ===== */
+  :root{
+    --f-io:#E3F2FD; --s-io:#1565C0; --t-io:#0D47A1;
+    --f-main:#E8F5E9; --s-main:#2E7D32; --t-main:#1B5E20;
+    --f-branch:#F3E5F5; --s-branch:#7B1FA2; --t-branch:#4A148C;
+    --f-pem:#FFF3E0; --s-pem:#EF6C00; --t-pem:#E65100;
+    --f-gate:#FFECB3; --s-gate:#F9A825; --t-gate:#F57F17;
+    --f-ctrl:#FFCCBC; --s-ctrl:#D84315; --t-ctrl:#BF360C;
+    --f-sleep:#EDE7F6; --s-sleep:#5E35B1; --t-sleep:#311B92;
+    --f-stat:#E0F7FA; --s-stat:#00838F; --t-stat:#006064;
+    --f-loss:#ECEFF1; --s-loss:#546E7A; --t-loss:#263238;
+    --f-note:#FAFAFA; --s-note:#B0BEC5; --t-note:#455A64;
+    --edge:#333333; --spine:#C5CDD4;
+  }
+  *{margin:0;padding:0;box-sizing:border-box;}
+  body{
+    background:#FFFFFF; color:var(--t-loss); padding:14px 16px 20px;
+    font:12px/1.4 "Trebuchet MS","Microsoft YaHei",Verdana,Arial,sans-serif;
+  }
+  .sheet{max-width:1640px;margin:0 auto;}
+
+  /* ---------- 图题 ---------- */
+  .ttl{font-size:14px;font-weight:bold;color:var(--edge);margin-bottom:4px;}
+  .ttl span{font-weight:normal;font-size:11px;color:var(--t-note);margin-left:8px;}
+
+  /* ---------- 主图：模块化泳道（纵向步骤 + 横向模块） ---------- */
+  .map{display:flex;align-items:center;overflow-x:auto;padding:10px 2px 12px;}
+
+  .grp{
+    flex:0 0 auto;border:2px solid;border-radius:8px;padding:6px 8px 9px;
+    display:flex;flex-direction:column;
+  }
+  .grp.g1{width:182px;background:#F1F8E9;border-color:var(--s-main);}
+  .grp.g2{width:182px;background:#F8F0FC;border-color:var(--s-branch);}
+  .grp.g3{width:158px;background:#FFFDE7;border-color:var(--s-gate);}
+  .grp.g4{width:192px;background:#FBE9E7;border-color:var(--s-ctrl);}
+  .grp.g5{width:170px;background:#F3EDFA;border-color:var(--s-sleep);}
+  .grp.g6{width:166px;background:#F5F7F8;border-color:var(--s-loss);}
+  .gt{
+    text-align:center;font-size:11.5px;font-weight:bold;padding:1px 0 7px;
+    white-space:nowrap;
+  }
+  .g1 > .gt{color:var(--t-main);} .g2 > .gt{color:var(--t-branch);}
+  .g3 > .gt{color:var(--t-gate);} .g4 > .gt{color:var(--t-ctrl);}
+  .g5 > .gt{color:var(--t-sleep);} .g6 > .gt{color:var(--t-loss);}
+
+  /* 每一步是纵向“流程柱”中的一个节点，节点间用细竖线相连（spine） */
+  .nds{display:flex;flex-direction:column;gap:15px;position:relative;}
+  .nds.plain{gap:6px;}
+  .nd{
+    position:relative;border:2px solid;border-radius:5px;padding:4px 6px;
+    font-size:12px;text-align:center;line-height:1.3;overflow-wrap:anywhere;
+  }
+  .nds > .nd:not(:first-child)::before{
+    content:"";position:absolute;left:50%;top:-12px;height:10px;
+    transform:translateX(-50%);border-left:1.5px solid var(--spine);
+  }
+  .nds.plain > .nd:not(:first-child)::before{display:none;}
+  .nd code{font-family:"Consolas","Courier New",monospace;font-size:11px;}
+  .nd.io{background:var(--f-io);border-color:var(--s-io);color:var(--t-io);}
+  .nd.main{background:var(--f-main);border-color:var(--s-main);color:var(--t-main);}
+  .nd.branch{background:var(--f-branch);border-color:var(--s-branch);color:var(--t-branch);}
+  .nd.pem{background:var(--f-pem);border-color:var(--s-pem);color:var(--t-pem);}
+  .nd.gate{background:var(--f-gate);border-color:var(--s-gate);color:var(--t-gate);}
+  .nd.ctrl{background:var(--f-ctrl);border-color:var(--s-ctrl);color:var(--t-ctrl);}
+  .nd.sleep{background:var(--f-sleep);border-color:var(--s-sleep);color:var(--t-sleep);}
+  .nd.stat{background:var(--f-stat);border-color:var(--s-stat);color:var(--t-stat);}
+  .nd.loss{background:var(--f-loss);border-color:var(--s-loss);color:var(--t-loss);}
+
+  /* ---------- 连线（模块间，横向） ---------- */
+  .link{
+    flex:0 0 52px;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;gap:5px;
+  }
+  .link .ln{width:46px;height:0;border-top:2px dashed var(--edge);position:relative;}
+  .link .ln.solid{border-top:3px solid var(--edge);}
+  .link .ln::after{
+    content:"";position:absolute;right:-2px;top:-5px;width:0;height:0;
+    border-top:4.5px solid transparent;border-bottom:4.5px solid transparent;
+    border-left:8px solid var(--edge);
+  }
+  .link .ln.solid::after{top:-6px;border-width:5.5px 0 5.5px 9px;}
+  .link .lb{font-size:10.5px;color:var(--t-note);white-space:nowrap;text-align:center;}
+
+  /* ---------- 反馈 / 触发（虚线边列表） ---------- */
+  .band{margin-top:8px;}
+  .meta{background:var(--f-note);border:1px dashed var(--s-note);border-radius:8px;padding:7px 11px 9px;}
+  .meta > h3{font-size:11.5px;font-weight:bold;color:var(--t-note);margin-bottom:6px;}
+  .edges{
+    list-style:none;display:grid;grid-template-columns:repeat(auto-fill,minmax(332px,1fr));
+    gap:9px 22px;
+  }
+  .edges li{display:flex;align-items:center;gap:5px;}
+  .edges .nd{font-size:11px;padding:2px 7px;white-space:nowrap;}
+  .edges .arw{flex:1;display:flex;flex-direction:column;align-items:center;gap:1px;min-width:60px;}
+  .edges .arw i{width:100%;height:0;border-top:2px dashed var(--edge);position:relative;}
+  .edges .arw i::after{
+    content:"";position:absolute;right:-2px;top:-4px;width:0;height:0;
+    border-top:4px solid transparent;border-bottom:4px solid transparent;
+    border-left:7px solid var(--edge);
+  }
+  .edges .arw em{font-style:normal;font-size:10px;color:var(--t-note);white-space:nowrap;}
+
+  /* ---------- 底部 META（横向流动，非等宽网格） ---------- */
+  .foot{margin-top:10px;display:flex;flex-wrap:wrap;gap:10px;align-items:stretch;}
+  .foot .meta{flex:1 1 268px;}
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:3px 8px;font-size:11.5px;color:var(--t-note);}
+  .kv dt{white-space:nowrap;font-weight:bold;}
+  .kv dd code{font-family:"Consolas","Courier New",monospace;font-size:11px;color:var(--t-loss);}
+  .chips{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:6px;}
+  .chip{
+    font-size:11px;border:2px solid var(--s-sleep);background:var(--f-sleep);
+    color:var(--t-sleep);border-radius:5px;padding:1px 6px;
+  }
+  .chip b{font-weight:bold;}
+  .lg{display:flex;flex-direction:column;gap:5px;font-size:11px;color:var(--t-note);}
+  .lg div{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+  .lg i{display:inline-block;width:30px;height:0;border-top:2px dashed var(--edge);}
+  .lg i.s{border-top:3px solid var(--edge);}
+  .lg .nd{font-size:10.5px;padding:1px 6px;}
+</style>
+</head>
+<body>
+<div class="sheet">
+
+  <div class="ttl">
+    Aeloru v3.2 · 主流程总览图（横向泳道）
+    <span>每个模块为一条纵向流程泳道，模块间横向相连　·　实线 = 前向数据流，虚线 = 门控 / 反馈 / 触发　·　细节见详图 D1–D7</span>
+  </div>
+
+  <!-- ============================ 主图：泳道 ============================ -->
+  <div class="map">
+
+    <!-- M5 -->
+    <div class="grp g5">
+      <div class="gt">M5　DLAM 慢速记忆（→ D5）</div>
+      <div class="nds">
+        <div class="nd sleep">① 触发 <code>cond(Σ)&gt;θ</code></div>
+        <div class="nd sleep">② 谱滤波核 <code>A(t_opt)</code></div>
+        <div class="nd sleep">③ 弱连接剪枝</div>
+        <div class="nd sleep">④ 原型 <code>proto</code></div>
+        <div class="nd sleep">⑤ 跨层异联想绑定</div>
+      </div>
+    </div>
+
+    <div class="link"><span class="lb">proto<br>慢速通路</span><i class="ln"></i></div>
+
+    <!-- M3 -->
+    <div class="grp g3">
+      <div class="gt">M3　双1D HGF 门控（→ D2）</div>
+      <div class="nds">
+        <div class="nd stat">① 运行统计<br><code>running_var</code> <code>diag(C_x)+μ_x²</code></div>
+        <div class="nd gate">② 精度 <code>π_out</code> <code>π_in</code></div>
+        <div class="nd gate">③ 可塑性 <code>p</code></div>
+      </div>
+    </div>
+
+    <div class="link"><span class="lb">p_out / p_in<br>行门 · 列门</span><i class="ln"></i></div>
+
+    <!-- M2 -->
+    <div class="grp g2">
+      <div class="gt">M2　低秩增量　r 维（→ D1, D6）</div>
+      <div class="nds">
+        <div class="nd branch">① <code>lora_A / lora_B</code></div>
+        <div class="nd gate">② 调制 <code>A′</code> <code>B′</code></div>
+        <div class="nd branch">③ <code>h = x·A′ᵀ</code></div>
+        <div class="nd pem">④ PEM 低秩神经动态（→ D6）</div>
+        <div class="nd branch">⑤ 侧抑制 · WTA</div>
+        <div class="nd branch">⑥ <code>Δy</code></div>
+      </div>
+    </div>
+
+    <div class="link"><span class="lb">Δy</span><i class="ln solid"></i></div>
+
+    <!-- M1 -->
+    <div class="grp g1">
+      <div class="gt">M1　主激活通路　d_out（→ D6）</div>
+      <div class="nds">
+        <div class="nd io">输入 x</div>
+        <div class="nd pem">① 动态白化</div>
+        <div class="nd main">② 冻结基座 <code>W₀ + b</code></div>
+        <div class="nd main">③ + ReLoRA <code>W_acc</code></div>
+        <div class="nd pem">④ 输出空间 PEM</div>
+        <div class="nd main">⑤ σ_P 域约束</div>
+        <div class="nd main">⑥ + <code>Δy</code></div>
+        <div class="nd branch">⑦ + Hebbian 影子</div>
+        <div class="nd main">⑧ 稳态增益 <code>g</code></div>
+        <div class="nd io">输出 y</div>
+      </div>
+    </div>
+
+    <div class="link"><span class="lb">x, y, loss</span><i class="ln"></i></div>
+
+    <!-- M4 -->
+    <div class="grp g4">
+      <div class="gt">M4　post_step_update（→ D3, D4）</div>
+      <div class="nds">
+        <div class="nd ctrl">① GHL 全局方向</div>
+        <div class="nd ctrl">② Hebbian 累积</div>
+        <div class="nd ctrl">③ flush 固化</div>
+        <div class="nd ctrl">④ 侧向连接</div>
+        <div class="nd ctrl">⑤ 波动率 <code>η_eff</code></div>
+        <div class="nd ctrl">⑥ 冲突检测 → 状态机</div>
+        <div class="nd ctrl">⑦ 在线统计 / 白化</div>
+        <div class="nd ctrl">⑧ 睡眠判定</div>
+        <div class="nd ctrl">⑨ 刷新门控</div>
+        <div class="nd ctrl">⑩ ReLoRA 合并</div>
+      </div>
+    </div>
+
+    <div class="link"><span class="lb">L / grad_norm</span><i class="ln"></i></div>
+
+    <!-- M6 -->
+    <div class="grp g6">
+      <div class="gt">M6　训练目标（→ D7）</div>
+      <div class="nds">
+        <div class="nd loss">① 正则 <code>L_ortho</code> <code>L_sphere</code></div>
+        <div class="nd loss">② <code>L = L_task + ΣL_reg</code></div>
+        <div class="nd loss">③ BP → <code>A/B, m_x, m_y</code></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================ 反馈 / 触发 ============================ -->
+  <div class="band">
+    <div class="meta">
+      <h3>反馈 / 触发（跨模块虚线边）</h3>
+      <ul class="edges">
+        <li><span class="nd main">M1 ⑧ y</span><span class="arw"><em>E[y²]</em><i></i></span><span class="nd gate">M3 ①</span></li>
+        <li><span class="nd main">M1 ⑧ y</span><span class="arw"><em>任务损失</em><i></i></span><span class="nd loss">M6 ②</span></li>
+        <li><span class="nd ctrl">M4 ③ flush</span><span class="arw"><em>影子增量</em><i></i></span><span class="nd main">M1 ⑦</span></li>
+        <li><span class="nd ctrl">M4 ④ 侧向</span><span class="arw"><em>W_lat</em><i></i></span><span class="nd branch">M2 ⑤</span></li>
+        <li><span class="nd ctrl">M4 ⑦ 统计</span><span class="arw"><em>μ_x, C_x, W_whiten</em><i></i></span><span class="nd main">M1 ①</span></li>
+        <li><span class="nd ctrl">M4 ⑦ 统计</span><span class="arw"><em>输入侧统计</em><i></i></span><span class="nd gate">M3 ①</span></li>
+        <li><span class="nd ctrl">M4 ⑧ 判定</span><span class="arw"><em>睡眠触发</em><i></i></span><span class="nd sleep">M5 ①</span></li>
+        <li><span class="nd ctrl">M4 ⑨</span><span class="arw"><em>刷新门控</em><i></i></span><span class="nd gate">M3 ③</span></li>
+        <li><span class="nd ctrl">M4 ⑩ 合并</span><span class="arw"><em>W_acc 累积</em><i></i></span><span class="nd main">M1 ③</span></li>
+        <li><span class="nd ctrl">M4 ⑥ 状态</span><span class="arw"><em>权重 / 噪声 / λ_ortho</em><i></i></span><span class="nd ctrl">M4 ②</span></li>
+        <li><span class="nd loss">M6 ③ BP</span><span class="arw"><em>参数更新</em><i></i></span><span class="nd branch">M2 ①</span></li>
+        <li><span class="nd loss">M6 ③ BP</span><span class="arw"><em>grad_norm</em><i></i></span><span class="nd ctrl">M4 ⑥</span></li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ============================ 底部 META ============================ -->
+  <div class="foot">
+    <div class="meta">
+      <h3>关键量（完整推导见详图）</h3>
+      <dl class="kv">
+        <dt>稳态增益</dt><dd><code>g = min(1/√running_var, h_max)</code></dd>
+        <dt>可塑性</dt><dd><code>p = max(exp[−(γπ + λ·proto)], p_min)</code></dd>
+        <dt>调制折叠</dt><dd><code>A′=A⊙(m_y·p_in)</code>　<code>B′=B⊙(m_x·p_out)</code></dd>
+        <dt>低秩增量</dt><dd><code>Δy = (α/r)·h·B′ᵀ</code></dd>
+      </dl>
+    </div>
+
+    <div class="meta">
+      <h3>配置预设</h3>
+      <div class="nds plain">
+        <div class="nd ctrl">llm_tuning（默认微调）<br><code>pem=lowrank · ndi=0 · domain=none</code><br><code>h_max=2.0 · whiten=1e9</code></div>
+        <div class="nd ctrl">cognitive_model<br><code>pem=output · ndi=5 · domain=nnantisparse</code><br><code>h_max=5.0 · whiten=500</code></div>
+      </div>
+    </div>
+
+    <div class="meta">
+      <h3>详图索引 · 图例</h3>
+      <div class="chips">
+        <span class="chip"><b>D1</b> 低秩调制</span><span class="chip"><b>D2</b> HGF 门控</span>
+        <span class="chip"><b>D3</b> 后处理时序</span><span class="chip"><b>D4</b> 红温状态机</span>
+        <span class="chip"><b>D5</b> DLAM 睡眠</span><span class="chip"><b>D6</b> PEM + 白化</span>
+        <span class="chip"><b>D7</b> 约束与目标</span>
+      </div>
+      <div class="lg">
+        <div><i class="s"></i> 实线 = 前向数据流（Δy 为加粗边）</div>
+        <div><i></i> 虚线 = 门控 / 反馈 / 触发</div>
+        <div>
+          <span class="nd pem">PEM / 白化</span>
+          <span class="nd stat">运行统计量</span>
+          <span class="nd gate">门控</span>
+          <span class="nd sleep">DLAM</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

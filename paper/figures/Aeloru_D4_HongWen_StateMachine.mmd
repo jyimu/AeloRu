@@ -1,0 +1,47 @@
+%% ============================================================================
+%% 详图 D4 · 对应主图模块 M4-⑥（冲突检测与认知状态机）
+%% 范围：冲突分数的计算、四状态的定义与转移条件、各状态对其它模块的调制
+%% 不含：状态机在 post_step_update 中的位置（→ D3）　门控公式（→ D2）
+%% 依据：aeloru_v3.py  _detect_and_transition() / _transition_state() / _global_sign_weight()
+%% 布局：左侧“触发”纵向柱 → 中部四状态横向环 → 右侧“调制”纵向柱，横纵结合
+%% ============================================================================
+%%{ init: { 'flowchart': { 'curve': 'basis', 'nodeSpacing': 18, 'rankSpacing': 60 } } }%%
+flowchart LR
+
+    classDef det  fill:#FFF3E0,stroke:#EF6C00,stroke-width:2px,color:#E65100
+    classDef s1   fill:#E8F5E9,stroke:#2E7D32,stroke-width:2px,color:#1B5E20
+    classDef s2   fill:#FFCCBC,stroke:#D84315,stroke-width:2px,color:#BF360C
+    classDef s3   fill:#E3F2FD,stroke:#1565C0,stroke-width:2px,color:#0D47A1
+    classDef s4   fill:#EDE7F6,stroke:#5E35B1,stroke-width:2px,color:#311B92
+    classDef note fill:#FAFAFA,stroke:#B0BEC5,stroke-width:1px,color:#455A64,stroke-dasharray:4 4
+    classDef warn fill:#FFF8E1,stroke:#FFA000,stroke-width:1px,color:#795548
+
+    DET["冲突检测（每 50 步，由 D3-⑥ 调用）<br/>buf = _hgf_delta_buffer 最近 50 条 Hebbian 幅度<br/>C = 5 × std(buf) / mean(buf)（不足 50 条直接返回，不做转移）"]:::det
+
+    subgraph CYCLE ["四阶段认知循环（横向环）"]
+        direction LR
+        EX["EXPLORE　自由探索期<br/>主导：Hebbian 无监督探索，BP 弱更新<br/>GHL 阶段系数 0.3（弱全局、强局部）<br/>Hebbian ✓　BP ✓"]:::s1
+        RD["RED　认知冲突期（红温）<br/>进入时立即 _flush_hebbian()，沉淀当前探索<br/>GHL 阶段系数 0.6<br/>Hebbian ✗　BP ✗"]:::s2
+        AN["ANCHOR　梯度锚定期<br/>主导：BP 精准修正，Hebbian 暂停<br/>正交惩罚 λ: 0.01 → 0.05（见 D7）<br/>GHL 阶段系数 1.0（强全局）<br/>Hebbian ✗　BP ✓"]:::s3
+        SD["SOLID　赫布固化期<br/>主导：Hebbian 固化，BP 微调<br/>STDP 噪声系数最小 ×0.1（防漂移）<br/>GHL 阶段系数 0.8<br/>Hebbian ✓　BP ✓"]:::s4
+
+        EX -->|"≥ explore_steps(100) 且 C > red_threshold(0.65)"| RD
+        RD -->|"≥ red_min_steps(50)"| AN
+        AN -->|"≥ anchor_steps(1) 且 近10步 Δ̄ < anchor_converge×100"| SD
+        SD -->|"≥ solid_steps(200)（step ≥ _solid_end_step）"| EX
+    end
+
+    MOD["状态对其它模块的调制<br/>GHL 权重 w = clamp( ghl_global_strength(0.8) × 阶段系数 , 0 , 1 )　→ D2 的 Hebbian 符号<br/>STDP 噪声状态系数：EXPLORE 1.0 / RED 1.5 / ANCHOR 0.5 / SOLID 0.1　→ D3-③<br/>正交惩罚系数：ANCHOR 提升至 0.05　→ D7"]:::det
+
+    NOTE["时间尺度：探索步数 : 锚定步数 ≈ 100 : 1，快慢双时间尺度，<br/>整体训练吞吐与标准 LoRA 基本持平"]:::note
+    WARN["与 paper.md §3.3.1 的差异（以代码为准）<br/>论文称红温期“强制执行一次 ReLoRA 权重合并”；<br/>v3.2 在 EXPLORE → RED 转移时仅执行 _flush_hebbian()，<br/>合并仍由 D3-⑩ 的 step_counter ≥ merge_every 固定步数触发。"]:::warn
+
+    DET --> EX
+    EX -.-> MOD
+    RD -.-> MOD
+    AN -.-> MOD
+    SD -.-> MOD
+    DET -.-> NOTE
+    RD -.-> WARN
+
+    style CYCLE fill:#F1F8E9,stroke:#2E7D32,stroke-width:2px

@@ -1,0 +1,139 @@
+%% ============================================================================
+%% Aeloru v3.2 · 主流程图（横向版 v3）
+%% 整体 LR：正向信息流 左 → 右（M5/M3 门控 → M2 低秩增量 → M1 主激活 → M4/M6 后处理）
+%% M1 / M2 / M4 内部拆为双列（隐形子图），控制整体高度
+%% 实线 = 前向数据流　虚线 = 门控 / 反馈 / 触发　细节推导见 D1–D7
+%% ============================================================================
+%%{ init: { 'flowchart': { 'curve': 'basis', 'nodeSpacing': 14, 'rankSpacing': 30 } } }%%
+flowchart LR
+
+    classDef io     fill:#E3F2FD,stroke:#1565C0,stroke-width:2px,color:#0D47A1,font-size:12px
+    classDef main   fill:#E8F5E9,stroke:#2E7D32,stroke-width:2px,color:#1B5E20,font-size:12px
+    classDef branch fill:#F3E5F5,stroke:#7B1FA2,stroke-width:2px,color:#4A148C,font-size:12px
+    classDef pem    fill:#FFF3E0,stroke:#EF6C00,stroke-width:2px,color:#E65100,font-size:12px
+    classDef gate   fill:#FFECB3,stroke:#F9A825,stroke-width:2px,color:#F57F17,font-size:12px
+    classDef ctrl   fill:#FFCCBC,stroke:#D84315,stroke-width:2px,color:#BF360C,font-size:12px
+    classDef sleep  fill:#EDE7F6,stroke:#5E35B1,stroke-width:2px,color:#311B92,font-size:12px
+    classDef stat   fill:#E0F7FA,stroke:#00838F,stroke-width:2px,color:#006064,font-size:12px
+    classDef loss   fill:#ECEFF1,stroke:#546E7A,stroke-width:2px,color:#263238,font-size:12px
+    classDef note   fill:#FAFAFA,stroke:#B0BEC5,stroke-width:1px,color:#455A64,stroke-dasharray:4 4,font-size:11px
+
+    %% ====================================================================
+    %% 带 1（最左）：M5 DLAM —— 慢速记忆经 proto 注入最左门控
+    %% ====================================================================
+    subgraph M5 ["M5　DLAM 慢速记忆（→ D5）"]
+        direction TB
+        DA["① 触发 cond>θ"]:::sleep --> DB["② 谱滤波核"]:::sleep --> DC["③ 弱连接剪枝"]:::sleep --> DD["④ 原型 proto"]:::sleep --> DE["⑤ 跨层绑定"]:::sleep
+    end
+
+    %% ====================================================================
+    %% 带 2：M3 HGF 门控
+    %% ====================================================================
+    subgraph M3 ["M3　双1D HGF 可塑性门控（→ D2）"]
+        direction TB
+        STT["① 运行统计"]:::stat --> PRC["② 精度 π"]:::gate --> PLA["③ 可塑性 p"]:::gate
+    end
+
+    %% ====================================================================
+    %% 带 3：M2 低秩增量（双列）
+    %% ====================================================================
+    subgraph M2 ["M2　低秩增量　r 维（→ D1, D6）"]
+        direction LR
+        subgraph M2L [" "]
+            direction TB
+            AB["① lora_A/B"]:::branch --> MOD["② 双1D调制 A′,B′"]:::gate --> HID["③ h=xA′ᵀ"]:::branch
+        end
+        subgraph M2R [" "]
+            direction TB
+            ND["④ PEM动态"]:::pem --> CMP["⑤ 侧抑制·WTA"]:::branch --> DY["⑥ Δy"]:::branch
+        end
+        HID --> ND
+    end
+
+    %% ====================================================================
+    %% 带 4：M1 主激活（双列）
+    %% ====================================================================
+    subgraph M1 ["M1　主激活通路　d_out（→ D6）"]
+        direction LR
+        subgraph M1L [" "]
+            direction TB
+            X(["x"]):::io --> WH["① 白化"]:::pem --> B0["② 冻结基座 W₀"]:::main --> ACC["③ +ReLoRA"]:::main --> PM["④ PEM"]:::pem
+        end
+        subgraph M1R [" "]
+            direction TB
+            SG["⑤ σ_P 域约束"]:::main --> ADD["⑥ +Δy"]:::main --> HB["⑦ +Hebb影子"]:::branch --> STG["⑧ 稳态 g"]:::main --> Y(["y"]):::io
+        end
+        PM --> SG
+    end
+
+    %% ====================================================================
+    %% 带 5：M4 训练步后处理（双列十步）
+    %% ====================================================================
+    subgraph M4 ["M4　post_step_update（→ D3, D4）"]
+        direction LR
+        subgraph M4L [" "]
+            direction TB
+            S1["① GHL"]:::ctrl --> S2["② Hebb累积"]:::ctrl --> S3["③ flush"]:::ctrl --> S4["④ 侧向"]:::ctrl --> S5["⑤ η_eff"]:::ctrl
+        end
+        subgraph M4R [" "]
+            direction TB
+            S6["⑥ 冲突检测"]:::ctrl --> S7["⑦ 统计/白化"]:::ctrl --> S8["⑧ 睡眠判定"]:::ctrl --> S9["⑨ 刷新门控"]:::ctrl --> S10["⑩ ReLoRA合并"]:::ctrl
+        end
+        S5 --> S6
+    end
+
+    %% ====================================================================
+    %% 带 6（最右）：M6 训练目标
+    %% ====================================================================
+    subgraph M6 ["M6　训练目标与约束（→ D7）"]
+        direction TB
+        RG["① 正则项"]:::loss --> LL["② L=L_task+L_ortho+L_sphere"]:::loss --> BP["③ BP→A/B, m_x, m_y"]:::loss
+    end
+
+    %% ====================================================================
+    %% 带 7：附注 + 配置预设（合并，省一条纵带）
+    %% ====================================================================
+    subgraph META ["附注与配置预设"]
+        direction TB
+        IDX["详图：D1 低秩调制 · D2 HGF门控 · D3 后处理时序 · D4 红温状态机 · D5 DLAM睡眠 · D6 PEM+白化 · D7 约束目标<br/>实线=前向数据流　虚线=门控/反馈/触发　　橙=PEM　青=运行统计量　紫=DLAM"]:::note
+        N1["llm_tuning（默认微调）<br/>pem=lowrank · ndi=0 · domain=none · h_max=2.0"]:::ctrl
+        N2["cognitive_model<br/>pem=output · ndi=5 · domain=nnantisparse · h_max=5.0 · whiten=500"]:::ctrl
+    end
+
+    %% ====================================================================
+    %% 正向主边
+    %% ====================================================================
+    DY ==> ADD
+
+    %% ====================================================================
+    %% 门控 / 反馈 / 触发（虚线）
+    %% ====================================================================
+    PLA -.->|"p_out / p_in"| MOD
+    DD  -.->|"proto 慢速通路"| PLA
+    Y   -.->|"E[y²]"| STT
+    Y   -.->|"x, y, loss"| S1
+    Y   -.->|"任务损失"| LL
+    S3  -.->|"影子增量"| HB
+    S4  -.->|"侧向权重"| CMP
+    S7  -.->|"μ_x, C_x, W_whiten"| WH
+    S7  -.->|"输入侧统计"| STT
+    S8  -.->|"触发"| DA
+    S9  -.->|"刷新"| PLA
+    S10 -.->|"W_acc 累积"| ACC
+    BP  -.->|"参数更新"| AB
+    BP  -.->|"grad_norm"| S6
+    S6  -.->|"状态→权重/噪声/λ_ortho"| S2
+
+    style M1 fill:#F1F8E9,stroke:#2E7D32,stroke-width:2px
+    style M2 fill:#F8F0FC,stroke:#7B1FA2,stroke-width:2px
+    style M3 fill:#FFFDE7,stroke:#F9A825,stroke-width:2px
+    style M4 fill:#FBE9E7,stroke:#D84315,stroke-width:2px
+    style M5 fill:#F3EDFA,stroke:#5E35B1,stroke-width:2px
+    style M6 fill:#F5F7F8,stroke:#546E7A,stroke-width:2px
+    style M2L fill:none,stroke:none
+    style M2R fill:none,stroke:none
+    style M1L fill:none,stroke:none
+    style M1R fill:none,stroke:none
+    style M4L fill:none,stroke:none
+    style M4R fill:none,stroke:none
+    style META fill:#FAFAFA,stroke:#B0BEC5,stroke-width:1px,stroke-dasharray:3 3

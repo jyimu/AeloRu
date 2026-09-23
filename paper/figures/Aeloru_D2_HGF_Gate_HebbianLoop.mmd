@@ -1,0 +1,87 @@
+%% ============================================================================
+%% 详图 D2 · 对应主图模块 M3（全模块）+ M4-②（Hebbian 快通路）
+%% 范围：可塑性门控的统计量来源、精度与可塑性的计算、双向闭环
+%% 不含：门控如何乘到 A/B 上（→ D1）　proto 的产生（→ D5）　冲突检测（→ D4）
+%% 依据：aeloru_v3.py  _update_plasticity() / hebbian_update() / _flush_hebbian()
+%% 布局：外层 LR 链（横向阶段），每个子框内部 TB（纵向步骤柱），横纵结合，避免大网格
+%% ============================================================================
+%%{ init: { 'flowchart': { 'curve': 'basis', 'nodeSpacing': 18, 'rankSpacing': 56 } } }%%
+flowchart LR
+
+    classDef stat fill:#E0F7FA,stroke:#00838F,stroke-width:2px,color:#006064
+    classDef gate fill:#FFECB3,stroke:#F9A825,stroke-width:2px,color:#F57F17
+    classDef hebb fill:#FFCCBC,stroke:#D84315,stroke-width:2px,color:#BF360C
+    classDef slow fill:#EDE7F6,stroke:#5E35B1,stroke-width:2px,color:#311B92
+    classDef ext  fill:#FFF3E0,stroke:#EF6C00,stroke-width:1px,color:#E65100,stroke-dasharray:4 4
+    classDef note fill:#FAFAFA,stroke:#B0BEC5,stroke-width:1px,color:#455A64,stroke-dasharray:4 4
+
+    %% ================= 横向链：来源 → 精度 → 可塑性 → 作用点 → Hebbian → 反馈 → 性质 =================
+    subgraph SRC ["① 统计量来源：复用前向既有统计，零额外开销"]
+        direction TB
+        RV["输出侧　running_var ← τ·running_var + (1−τ)·E[y²]<br/>由主图 M1-⑧ 稳态可塑性维护"]:::stat
+        CX["输入侧　diag(C_x)+μ_x² ← 白化模块在线一/二阶矩<br/>由主图 M4-⑦ 维护"]:::stat
+    end
+
+    subgraph PI ["② 精度 π（每步实时响应分布）"]
+        direction TB
+        PI_OUT["π_out = ( 1 / (running_var + ε) ) / mean( · )"]:::gate
+        PI_IN["π_in = ( 1 / (diag(C_x)+μ_x²+ε) ) / mean( · )"]:::gate
+    end
+
+    PROTO["原型 proto_out / proto_in（DLAM 给出，每次睡眠刷新，见 D5）"]:::slow
+
+    subgraph P ["③ 可塑性 p"]
+        direction TB
+        P_OUT["p_out = max( exp[ −( γ·π_out + λ·proto_out ) ] , p_min )"]:::gate
+        P_IN["p_in  = max( exp[ −( γ·π_in  + λ·proto_in  ) ] , p_min )"]:::gate
+    end
+
+    subgraph APPLY ["④ 门控作用点（两处共用同一组门向量）"]
+        direction TB
+        A1["慢通路：ΔW″ = p_out[:] ⊙ ΔW′ ⊙ p_in[:]　→ 见 D1"]:::gate
+        A2["快通路：Hebbian 更新 dA′ = dA ⊙ p_in　dB′ = dB ⊙ p_out"]:::hebb
+    end
+
+    subgraph HEBB ["⑤ Hebbian 更新规则（无梯度，对应 M4-②）"]
+        direction TB
+        H1["x̄ = mean(x)　ȳ = mean(y)"]:::hebb
+        H2["局部奖励 sign：is_correct 错取 −1，否则 +1<br/>GHL 门：w = clamp( ghl_global_strength × 阶段系数 , 0 , 1 )（系数见 D4）<br/>s = (1 − w)·局部奖励 + w·global_direction"]:::hebb
+        H3["dB = s·η_h·ȳ·x̄[1:r]ᵀ ⊙ p_out　dA = s·η_h·ȳ[1:r]·x̄ᵀ ⊙ p_in<br/>η_h = hebbian_lr × dynamic_lr（dynamic_lr 见 D3-⑤）"]:::hebb
+        H4["累积 hebbian_accum_steps 步 → 触发 flush（见 D3-③）"]:::hebb
+    end
+
+    subgraph BACK ["⑥ 反馈通路：Hebbian 幅度反向驱动三个下游"]
+        direction TB
+        B1["I_t = mean abs(acc_B) + mean abs(acc_A)（flush 前采样）"]:::hebb
+        B2["① 冲突检测：写入长度 100 滑动缓冲 → D4"]:::hebb
+        B3["② HGF 波动率：参与噪声尺度调制 → D3-⑤"]:::hebb
+        B4["③ 精度代理回退：稳态关闭时 I_t 的行列均值充当 π 观测源<br/>保证任意配置下门控不失效"]:::hebb
+    end
+
+    NOTE["关键性质<br/>· 复杂度 O(d_out·d_in) → O(d_out + d_in)：本文注入层（896×896，r=8）下降约 448 倍<br/>· 复用优于新增：running_var 与 C_x 前向本就存在，门控不引入新每步全量运算<br/>· 快慢叠加：π 每步更新（实时）+ proto 每次睡眠更新（长期记忆）<br/>· 与 Hi-DoRA 结构同构，构成“双一维调制”统一架构（见 D1）"]:::note
+
+    SRC --> PI --> P --> APPLY --> HEBB --> BACK --> NOTE
+    RV --> PI_OUT
+    CX --> PI_IN
+    PI_OUT --> P_OUT
+    PI_IN  --> P_IN
+    PROTO -.-> P_OUT
+    PROTO -.-> P_IN
+    P_OUT -.-> A1
+    P_IN  -.-> A1
+    P_OUT -.-> A2
+    P_IN  -.-> A2
+    A2 --> H1
+    H1 --> H2 --> H3 --> H4
+    H4 --> B1
+    B1 --> B2
+    B1 --> B3
+    B1 -.-> B4
+    B4 -.->|"退化回退"| PI_OUT
+    B4 -.->|"退化回退"| PI_IN
+    B2 --> NOTE
+
+    style SRC  fill:#E0F7FA,stroke:#00838F,stroke-width:2px
+    style APPLY fill:#FFFDE7,stroke:#F9A825,stroke-width:2px
+    style HEBB fill:#FBE9E7,stroke:#D84315,stroke-width:2px
+    style BACK fill:#FFF3E0,stroke:#EF6C00,stroke-width:2px

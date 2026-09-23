@@ -1,0 +1,77 @@
+%% ============================================================================
+%% 详图 D6 · 对应主图 M2-④（低秩 PEM）、M1-①（输入白化）、M1-④（输出空间 PEM）
+%% 范围：三条 PEM / 白化分支的内部迭代逻辑、数值稳定性措施、适用边界
+%% 不含：h 在主通路中的位置（→ 主图 M2）　门控与调制（→ D1）
+%% 依据：aeloru_v3.py  _low_rank_neural_dynamics() / run_predictive_neural_dynamics()
+%%       / whiten_input() / LowRankPrecisionMatrix / paper.md §3.6、§5.10
+%% 布局：x 分流 → 三条分支并列（每条为纵向步骤柱）→ 边界说明，横纵结合
+%% ============================================================================
+%%{ init: { 'flowchart': { 'curve': 'basis', 'nodeSpacing': 16, 'rankSpacing': 50 } } }%%
+flowchart LR
+
+    classDef in   fill:#E3F2FD,stroke:#1565C0,stroke-width:2px,color:#0D47A1
+    classDef low  fill:#FFF3E0,stroke:#EF6C00,stroke-width:2px,color:#E65100
+    classDef out  fill:#FFCCBC,stroke:#D84315,stroke-width:2px,color:#BF360C
+    classDef whit fill:#E0F7FA,stroke:#00838F,stroke-width:2px,color:#006064
+    classDef warn fill:#FAFAFA,stroke:#B0BEC5,stroke-width:1px,color:#455A64,stroke-dasharray:4 4
+
+    X(["输入 x"]):::in
+
+    %% ===================== 分支 A：低秩神经动态（纵向柱） =====================
+    subgraph A ["分支 A　PEM 低秩神经动态　（主图 M2-④，默认路径）"]
+        direction TB
+        A1["h = x · A′ᵀ　（r 维，3D 折叠为 2D 参与迭代）"]:::low
+        A2["在线统计（no_grad，不参与梯度）<br/>μ_h ← λ·μ_h + (1−λ)·mean(h)<br/>C_hh ← λ·C_hh + (1−λ)·(h̄ᵀ h̄)/N　　λ = lambda_lateral = 0.9"]:::low
+        A3["尺度无关归一化　C_n = C_hh / mean(diag(C_hh))<br/>必要性：直接用 C_hh⁻¹ 时，h 方差小则逆矩阵特征值极大，<br/>驱动退化为 (1/scale)·h，实测把输出放大 60 倍"]:::low
+        A4["eigh(C_n) → 特征值限幅到 [1/c_max, c_max]（c_max = 5）<br/>C_inv = V · diag(1/λ) · Vᵀ　失败时回退为单位阵"]:::low
+        A5{{"快速推断迭代 j = 0 … ndi − 1　η_j = max(0.9/(j+1), 0.01)"}}:::low
+        A6["grad_h = λ_lat · (h · W_latᵀ)　+　w_coef · (h · C_invᵀ − h)<br/>　　　　侧向抑制（特征解耦）　　　精度加权去相关（推向各向同性）"]:::low
+        A7["h ← h − η_j · grad_h"]:::low
+        A8{"出现非有限值？或 ‖Δh‖ < 1e−8·‖h‖？"}:::low
+        A9["非有限值：丢弃本轮结果，返回原始 h（安全阀）"]:::low
+        A10["straight-through 残差接回　h ← h + ( ND(h) − h.detach() )<br/>前向数值等价，梯度沿恒等通路回传到 lora_A / m_y / p_in"]:::low
+        A1 --> A2 --> A3 --> A4 --> A5 --> A6 --> A7 --> A8
+        A8 -->|"否"| A5
+        A8 -->|"收敛"| A10
+        A8 -->|"是"| A9
+    end
+
+    %% ===================== 分支 B：输出空间神经动态（纵向柱） =====================
+    subgraph B ["分支 B　PEM 输出空间神经动态　（主图 M1-④，仅 cognitive_model 预设）"]
+        direction TB
+        B1["W_base = W₀ + W_acc　y_ke = x · W_baseᵀ（基座预测）"]:::out
+        B2["低秩精度矩阵 Woodbury：C_y = B_basis·C_h·B_basisᵀ + ε·I<br/>C_y⁻¹·ȳ 由 r×r 核心求逆完成，避免 d_out × d_out 求逆<br/>冷启动修复：B_basis 由 lora_B 初始化，退化时回退随机基（缺陷 #5）"]:::out
+        B3{{"迭代 j = 0 … ndi − 1"}}:::out
+        B4["grad_y = γ_pred · (y − y_ke)　+　( C_y⁻¹·ȳ − ȳ )<br/>　　　　预测校正（γ = 100）　　　　精度加权侧向项"]:::out
+        B5["y ← y − η_j · grad_y　→ 每步施加源域投影 σ_P（clamp / simplex）"]:::out
+        B1 --> B2 --> B3 --> B4 --> B5
+        B5 -->|"j 递增，未收敛"| B3
+    end
+
+    %% ===================== 分支 C：输入动态白化（纵向柱） =====================
+    subgraph C ["分支 C　输入动态白化　（主图 M1-①）"]
+        direction TB
+        C1["μ_x ← λ·μ_x + (1−λ)·mean(x)　　C_x ← λ·C_x + (1−λ)·(x̄ x̄ᵀ)　（D3-⑦ 维护）"]:::whit
+        C2{"step % whitening_interval == 0 ?"}:::whit
+        C3["SVD(C_x) = U S Vᵀ　→　W_whiten = U · diag(1/√(S + 1e−5)) · Vᵀ　（失败则跳过）"]:::whit
+        C4["前向：x ← (x − μ_x) · W_whitenᵀ"]:::whit
+        C1 --> C2 -->|"是"| C3 --> C4
+        C2 -->|"否"| C4
+    end
+
+    X --> A1
+    X --> B1
+    X --> C1
+    C4 --> A1
+
+    %% ===================== 实测边界（虚线引出） =====================
+    WARN_B["实测（v3.1，未低秩化时）：单层输出范数 573 → 0.193（ndi=2）、放大 13×（ndi=1），loss 7.9 vs 3.87<br/>根因：y_ke 与 y 同为基座输出，误差项恒等于 bias 并被 γ_pred = 100 放大（缺陷 #3）<br/>→ v3.2 默认改走分支 A；分支 B 仅保留给从零训练场景"]:::warn
+    WARN_A["低秩化解决了“破坏预训练表示”这一致命问题，但并未使 PEM 转为正贡献。<br/>§5.10 判决性实验：ndi = 0→2→8 时 corr_abs 0.106→0.263、coup_red +56%，<br/>Forgetting +28%、BWT 单调恶化，ACC 基本持平；开环对照（冻结 A）下“选择性”消失。<br/>→ PEM 的去相关驱动是精度加权的（∝ C⁻¹），按能量而非按任务行事。<br/>→ llm_tuning() 默认 ndi = 0，PEM 定位为从零训练大维度认知模型组件。"]:::warn
+    WARN_C["默认 whitening_interval = 1e9（等效关闭，W_whiten = I）：<br/>预训练 LLM 已有 LayerNorm，输入白化属重复归一化（缺陷 #11）"]:::warn
+    B5 -.-> WARN_B
+    A10 -.-> WARN_A
+    C4 -.-> WARN_C
+
+    style A fill:#FFF8E1,stroke:#EF6C00,stroke-width:2px
+    style B fill:#FBE9E7,stroke:#D84315,stroke-width:2px
+    style C fill:#E0F7FA,stroke:#00838F,stroke-width:2px

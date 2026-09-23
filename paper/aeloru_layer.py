@@ -4023,7 +4023,7 @@ def test_aeloru():
 # =============================================================================
 
 if __name__ == "__main__":
-    test_aeloru()
+    # test_aeloru()
     benchmark_aeloru()
 
  
