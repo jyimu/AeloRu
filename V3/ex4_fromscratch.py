@@ -124,7 +124,7 @@ BASE_CFG_FIELDS = dict(
     sleep_condition_threshold=10 ** 9,
     energy_eta=0.15,
     predictive_coding_rank=16,
-    gamma_predictive=100.0,
+    gamma_predictive=1.0,
     logging_enabled=False,
     diagnostic_enabled=False,
     AMP_DTYPE=torch.float32,    # 从零训练强制 float32，避免 bf16/fp16 不稳定
@@ -888,7 +888,7 @@ def main():
     log("=" * 78, fh)
     log("ex4: 从零训练测试 Aeloru v3.1 各模组（聚焦 PEM）", fh)
     log(f"网络维度: {dims}  (in={dims[0]}, hidden={args.hidden}, layers={args.layers}, out=2)", fh)
-    log(f"低秩 r={r}  alpha={alpha}  PEM 空间={args.pem_space}", fh)
+    log(f"低秩 r={r}  alpha={alpha}  PEM 空间={BASE_CFG_FIELDS['pem_space']}", fh)
     log(f"数据: info={args.n_info} red={args.n_red} noise={args.n_noise} rho={args.rho} "
         f"train={args.n_train} val={args.n_val}", fh)
     log(f"配置: {configs}  seeds={seeds}  steps={args.steps} bs={args.bs} lr={args.lr}", fh)

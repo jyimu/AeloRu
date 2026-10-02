@@ -1,0 +1,4 @@
+gamma,base_acc,nopem_acc,acc_gain_pp,corr_abs_change_pct,eff_rank_change_pct,loss_scale_at_2000step
+100,0.5357,0.5083,2.74,35.4,-14.6,1e6
+10,0.5373,0.5083,2.90,29.5,-12.5,1e6
+1,0.5250,0.5083,1.67,34.0,-14.0,1e5-1e6

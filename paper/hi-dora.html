@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>广播机制示意图 - Mermaid 风格</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
+    background: #f5f5f5;
+    font-family: 'Segoe UI', Arial, sans-serif;
+  }
+  .diagram-container {
+    background: white;
+    border-radius: 8px;
+    padding: 30px 40px;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+    border: 1px solid #e0e0e0;
+  }
+  .formula-title {
+    font-family: 'Courier New', monospace;
+    font-size: 18px;
+    color: #d00;
+    font-weight: bold;
+    text-align: center;
+    margin-bottom: 25px;
+  }
+  .main-layout {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+  }
+  .box {
+    border: 2px solid #d00;
+    background: white;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    color: #333;
+    border-radius: 4px;
+    position: relative;
+    overflow: hidden;
+  }
+  .box::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: linear-gradient(135deg, rgba(221,0,0,0.03) 0%, transparent 60%);
+    pointer-events: none;
+  }
+  .mx-box {
+    width: 45px;
+    height: 185px;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .mx-label { font-size: 14px; font-weight: 500; }
+  .mx-note { font-size: 12px; color: #888; font-style: italic; }
+  .broadcast {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: 0 8px;
+  }
+  .broadcast-symbol {
+    font-size: 20px;
+    color: #d00;
+    font-weight: bold;
+  }
+  .broadcast-note {
+    font-size: 11px;
+    color: #999;
+    font-style: italic;
+  }
+  .right-column {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .my-box {
+    width: 245px;
+    height: 42px;
+    font-size: 14px;
+    font-weight: 500;
+  }
+  .dw-box {
+    width: 245px;
+    height: 131px;
+    font-size: 20px;
+    font-weight: bold;
+  }
+  .bottom-note {
+    font-size: 12px;
+    color: #999;
+    font-style: italic;
+    text-align: center;
+    margin-top: 20px;
+  }
+</style>
+<base target="_blank">
+</head>
+<body>
+<div class="diagram-container">
+  <div class="formula-title">ΔW' = (m<sub>x</sub> · m<sub>y</sub><sup>T</sup>) ⊙ ΔW</div>
+  <div class="main-layout">
+    <!-- 左侧竖长方形: m_x -->
+    <div class="box mx-box">
+      <span class="mx-label">m<sub>y</sub><sup>T</sup></span>
+      <span class="mx-note">(col)</span>
+    </div>
+    <!-- 广播符号 -->
+    <div class="broadcast">
+      <span class="broadcast-symbol">⊗</span>
+      <span class="broadcast-note">broadcast</span>
+    </div>
+    <!-- 右侧区域 -->
+    <div class="right-column">
+      <!-- 上方横长方形: m_y^T -->
+      <div class="box my-box">m<sub>x</sub></div>
+      <!-- 下方大正方形: ΔW -->
+      <div class="box dw-box">ΔW</div>
+    </div>
+  </div>
+  <div class="bottom-note">* 实际计算通过广播机制实现，非显式外积</div>
+</div>
+</body>
+</html>

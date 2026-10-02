@@ -1,0 +1,4 @@
+scenario,space_dim,r,gamma,acc_gain_pp,corr_abs_change_pct,verdict
+lowrank_r16,16,16,10,0.33,0.9,neutral
+output_r16,64,16,10,1.17,51.8,weak_positive
+output_r64,64,64,10,2.90,29.5,strong_positive
