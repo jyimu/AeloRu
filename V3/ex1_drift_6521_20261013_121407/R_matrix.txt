@@ -1,0 +1,30 @@
+
+=== lora ===
+R[i][j]: 第 i 个任务训练后，在任务 j 上的准确率
+            sst2    mrpc    qnli     rte    cola
+   sst2   0.6567     n/a     n/a     n/a     n/a
+   mrpc   0.6033  0.6600     n/a     n/a     n/a
+   qnli   0.5700  0.6233  0.6133     n/a     n/a
+    rte   0.6000  0.5800  0.6200  0.5596     n/a
+   cola   0.5533  0.6767  0.5867  0.5271  0.7100
+zero-shot:   0.4900  0.6500  0.5033  0.5343  0.5300
+
+=== aeloru-safe ===
+R[i][j]: 第 i 个任务训练后，在任务 j 上的准确率
+            sst2    mrpc    qnli     rte    cola
+   sst2   0.6533     n/a     n/a     n/a     n/a
+   mrpc   0.6200  0.5800     n/a     n/a     n/a
+   qnli   0.6067  0.6400  0.5400     n/a     n/a
+    rte   0.6300  0.6233  0.5500  0.5884     n/a
+   cola   0.5867  0.6533  0.5267  0.5523  0.6667
+zero-shot:   0.4900  0.6133  0.5400  0.5379  0.4333
+
+=== aeloru-default ===
+R[i][j]: 第 i 个任务训练后，在任务 j 上的准确率
+            sst2    mrpc    qnli     rte    cola
+   sst2   0.6200     n/a     n/a     n/a     n/a
+   mrpc   0.5833  0.5667     n/a     n/a     n/a
+   qnli   0.5800  0.6200  0.6067     n/a     n/a
+    rte   0.5833  0.5733  0.6000  0.5632     n/a
+   cola   0.5567  0.5800  0.5633  0.5560  0.6833
+zero-shot:   0.5033  0.5667  0.5633  0.5596  0.4600

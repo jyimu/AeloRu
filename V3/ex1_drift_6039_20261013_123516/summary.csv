@@ -1,0 +1,4 @@
+﻿method,ACC,BWT,FWT,Forgetting,params,sleep,seconds
+lora,0.5979,-0.0619,0.003,0.0653,59136,0,162.2
+aeloru-safe,0.5831,-0.0047,-0.0037,0.0127,66304,20,210.6
+aeloru-default,0.5542,-0.0383,0.0026,0.0513,66304,20,207.6

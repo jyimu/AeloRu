@@ -27,9 +27,27 @@ C_OUT, C_LOW = "#D1495B", "#2F6FB5"
 C_IDX = {"base": "#111111", "nopem": "#7A9E3F"}
 
 
-def load(tag):
-    d = pd.read_csv(os.path.join(BASE, f"ex4_pem_space={tag}", "summary.csv"))
-    return d.set_index("config")
+def load(tag, gamma=100.0, r=None):
+    """Locate a summary.csv for the given pem_space / gamma / r."""
+    import glob as _g
+    pats = [os.path.join(BASE, f"ex4_pem_space={tag}", "summary.csv"),
+            os.path.join(BASE, f"ex4_pem_space={tag},*", "summary.csv"),
+            os.path.join(BASE, "OUTPUT", f"ex4_pem_space={tag},*", "summary.csv"),
+            os.path.join(BASE, "OUTPUT", f"ex4_fromscratchpem_space={tag},*",
+                         "summary.csv"),
+            os.path.join(BASE, "OUTPUT",
+                         f"ex4_fromscratch_pem_space={tag},*", "summary.csv")]
+    for p in pats:
+        for c in sorted(_g.glob(p)):
+            nm = os.path.basename(os.path.dirname(c))
+            if f"gamma_predictive={gamma}" not in nm:
+                continue
+            if r is not None and f"r={r}" not in nm:
+                continue
+            if r is None and f"r={r}" in nm:
+                continue
+            return pd.read_csv(c).set_index("config")
+    raise FileNotFoundError(f"no run found for {tag} gamma={gamma} r={r}")
 
 
 def save(fig, name):
@@ -39,7 +57,6 @@ def save(fig, name):
 
 
 OUTD, LOWD = load("output"), load("lowrank")
-
 
 def fig_ex4_pem():
     fig, axes = plt.subplots(1, 3, figsize=(13.0, 4.1))
@@ -212,9 +229,106 @@ def fig_ex4_scatter():
     save(fig, "fig_ex4_scatter.png")
 
 
+def fig_ex4_gamma():
+    """gamma dose-response + divergence diagnosis (uses OUTPUT/ sweep)."""
+    O = os.path.join(BASE, "OUTPUT")
+    DIRS = {
+        ("output", 64, 100.0): "ex4_pem_space=output,gamma_predictive=100.0,",
+        ("output", 64, 10.0): "ex4_fromscratch_pem_space=output,gamma_predictive=10.0",
+        ("output", 64, 1.0): "ex4_fromscratchpem_space=output,gamma_predictive=1.0",
+        ("lowrank", 64, 100.0): "ex4_pem_space=lowrank,gamma_predictive=100.0",
+        ("lowrank", 16, 10.0): "ex4_pem_space=lowrank,gamma_predictive=10.0,r=16",
+        ("output", 16, 10.0): "ex4_pem_space=output,gamma_predictive=10.0,r=16",
+    }
+    data = {}
+    for k, d in DIRS.items():
+        p = os.path.join(O, d, "summary.csv")
+        s = pd.read_csv(p).set_index("config")
+        gain = float(s.loc["base", "acc_mean"]) - float(s.loc["nopem", "acc_mean"])
+        lp = os.path.join(O, d, "losses.txt")
+        lmax = float("nan")
+        if os.path.exists(lp):
+            with open(lp, encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("base:"):
+                        lmax = float(np.max([float(v) for v in
+                                             line.split(":", 1)[1].split()]))
+                        break
+        data[k] = dict(gain=gain * 100, corr=float(s.loc["base", "corr_abs"]),
+                       lmax=lmax, acc=float(s.loc["base", "acc_mean"]))
+
+    fig, axes = plt.subplots(1, 3, figsize=(13.4, 4.1))
+
+    ax = axes[0]
+    g = [1.0, 10.0, 100.0]
+    v = [data[("output", 64, x)]["gain"] for x in g]
+    ax.plot(g, v, "o-", color="#D1495B", lw=2, ms=7,
+            label="$r=64$ (near full rank)")
+    ax.axhline(0, color="k", lw=0.9, ls="--")
+    for x, y in zip(g, v):
+        ax.annotate(f"{y:+.2f}", (x, y), textcoords="offset points",
+                    xytext=(0, 9), ha="center", fontsize=8.5)
+    v16 = data[("output", 16, 10.0)]["gain"]
+    ax.scatter([10.0], [v16], s=110, marker="s", color="#E08A00", zorder=4,
+               label=f"$r=16$ ($\\gamma$=10, {v16:+.2f})")
+    ax.set_xscale("log")
+    ax.set_xticks(g); ax.set_xticklabels(["1", "10", "100"])
+    ax.set_xlabel("$\\gamma_{predictive}$")
+    ax.set_ylabel("PEM accuracy gain over PEM-off (pp)")
+    ax.set_title("(a) Gain is dose-dependent, not an artefact of $\\gamma$")
+    ax.legend(frameon=False, fontsize=8.3)
+
+    ax = axes[1]
+    xs, ys, cs, labs = [], [], [], []
+    for k, tag in [(("output", 64, 100.0), "out r=64 $\\gamma$=100"),
+                   (("output", 64, 10.0), "out r=64 $\\gamma$=10"),
+                   (("output", 64, 1.0), "out r=64 $\\gamma$=1"),
+                   (("output", 16, 10.0), "out r=16 $\\gamma$=10"),
+                   (("lowrank", 64, 100.0), "low r=64 $\\gamma$=100"),
+                   (("lowrank", 16, 10.0), "low r=16 $\\gamma$=10")]:
+        xs.append(data[k]["lmax"]); ys.append(tag)
+        cs.append("#D1495B" if k[0] == "output" else "#2F6FB5")
+        labs.append(tag)
+    ax.barh(range(len(xs)), xs, color=cs, alpha=0.85)
+    for i, x in enumerate(xs):
+        ax.text(x * 1.15, i, f"{x:.1e}", va="center", fontsize=7.8)
+    ax.set_yticks(range(len(xs))); ax.set_yticklabels(labs, fontsize=8.2)
+    ax.set_xscale("log")
+    ax.set_xlim(1, 1e9)
+    ax.set_xlabel("max training loss over 2000 steps (log)")
+    ax.set_title("(b) Divergence is NOT caused by $\\gamma$=100")
+    ax.grid(axis="y", alpha=0)
+
+    ax = axes[2]
+    ks = [("output", 64), ("output", 16), ("lowrank", 64), ("lowrank", 16)]
+    gains = [data[("output", 64, 10.0)]["gain"],
+             data[("output", 16, 10.0)]["gain"],
+             data[("lowrank", 64, 100.0)]["gain"],
+             data[("lowrank", 16, 10.0)]["gain"]]
+    corrs = [data[("output", 64, 10.0)]["corr"],
+             data[("output", 16, 10.0)]["corr"],
+             data[("lowrank", 64, 100.0)]["corr"],
+             data[("lowrank", 16, 10.0)]["corr"]]
+    labs = ["output\n$r$=64", "output\n$r$=16",
+            "lowrank\n$r$=64", "lowrank\n$r$=16"]
+    cols = ["#D1495B", "#E08A00", "#2F6FB5", "#7A9E3F"]
+    b = ax.bar(range(4), gains, color=cols, width=0.6)
+    ax.axhline(0, color="k", lw=0.9)
+    for bb, gv, cv in zip(b, gains, corrs):
+        ax.text(bb.get_x() + bb.get_width() / 2, gv + (0.12 if gv >= 0 else -0.30),
+                f"{gv:+.2f} pp\n$|\\rho|$={cv:.3f}", ha="center", fontsize=7.4)
+    ax.set_xticks(range(4)); ax.set_xticklabels(labs, fontsize=8.4)
+    ax.set_ylabel("PEM accuracy gain (pp)")
+    ax.set_ylim(-2.2, 3.8)
+    ax.set_title("(c) Gain shrinks with the operating space")
+    fig.tight_layout()
+    save(fig, "fig_ex4_gamma.png")
+
+
 if __name__ == "__main__":
     fig_ex4_pem()
     fig_ex4_ablation()
     fig_ex4_loss()
     fig_ex4_scatter()
+    fig_ex4_gamma()
     print("ALL DONE")

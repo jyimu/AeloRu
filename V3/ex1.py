@@ -694,7 +694,7 @@ def make_mech_figure(results: List[dict], tasks: List[str], out_dir: str) -> Opt
 # 主流程
 # ============================================================================
 
-def main():
+def main(seed: int = 42):
     ap = argparse.ArgumentParser(description="Aeloru v3.1 概念漂移测试")
     ap.add_argument("--methods", type=str, default=",".join(METHODS))
     ap.add_argument("--steps", type=int, default=250, help="每个任务的训练步数")
@@ -708,7 +708,7 @@ def main():
                     help="正交惩罚 + SPHeRe 结构保持损失的权重（Aeloru 专用）")
     ap.add_argument("--n-train", type=int, default=3000)
     ap.add_argument("--n-val", type=int, default=300)
-    ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--seed", type=int, default=seed)
     ap.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--out", type=str, default="")
     args = ap.parse_args()
@@ -720,7 +720,7 @@ def main():
 
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir = args.out or os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                       f"ex1_drift_{ts}")
+                                       f"ex1_drift_{args.seed}_{ts}")
     os.makedirs(out_dir, exist_ok=True)
     log_path = os.path.join(out_dir, "log.txt")
     fh = open(log_path, "w", encoding="utf-8")
@@ -804,4 +804,9 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    if argparse.__name__ == "__main__":
+        main()
+    else:
+        import random
+        for seed in [random.randint(0, 9999) for _ in range(3)]:
+            main(seed=seed)
