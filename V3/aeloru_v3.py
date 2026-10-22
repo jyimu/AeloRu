@@ -399,9 +399,14 @@ class LowRankPrecisionMatrix(nn.Module):
         with torch.no_grad():
             B = self.B_basis
             eps = self.epsilon
+            # 重新条件化：C_h 可能退化（某输出维度死亡→对角为零，或尚未更新→全零）
+            # 导致 linalg.inv 奇异。加相对对角抖动避免崩溃（与 spectral_filter 一致）。
+            C_h = self.C_h
+            j = 1e-2 * C_h.diagonal().abs().max().clamp(min=1e-6)
+            C_h = C_h + j * torch.eye(C_h.shape[0], device=C_h.device, dtype=C_h.dtype)
             Bt_y = torch.matmul(B.t(), y_bar.t())
             BtB = torch.matmul(B.t(), B)
-            C_h_inv = torch.linalg.inv(self.C_h)
+            C_h_inv = torch.linalg.inv(C_h)
             M = C_h_inv + BtB / eps
             z = torch.linalg.solve(M, Bt_y / eps)
             result = y_bar.t() / eps - torch.matmul(B, z) / eps

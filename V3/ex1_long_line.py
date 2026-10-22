@@ -27,6 +27,10 @@ R[i][j]（任务 i 训练结束后，在任务 j 上的准确率）。
                     预测编码 ndi=0(关闭全输出空间 PEM) / 域约束 none /
                     稳态增益上限 2.0(按 llm_tuning 预设，非 1.0，且保持开启)
 - aeloru-default  : Aeloru llm_tuning 出厂默认（低秩 PEM 开启、稳态增益上限 2.0）
+- aeloru-fromscratch: 从零训练组（论文 §3.7.3 cognitive_model 预设），
+                    冻结 Qwen 词嵌入前端 + 从零 Kaiming 初始化的 Aeloru MLP；
+                    可训练参数预算对齐 aeloru-safe（≈66,304），W0 仅由 ReLoRA 合并更新；
+                    PEM 走全输出空间(pem_space="output")、ndi=5、homeostatic_max_gain=5.0。
 
 Aeloru v3.1 机制监控
 --------------------
@@ -42,6 +46,11 @@ loss_structure（SPHeRe 结构保持）、认知状态、原型重要性（DLAM 
     python ex1.py --repeat 3 --runs 2                   # 长线重复 3 轮、完整实验跑 2 次
     python ex1.py --methods lora --seed 7 --device cpu  # 单方法/指定种子/CPU
     python ex1.py --seed 42,9589,6519,1412             # 论文 §4.1.3 四种子（默认）
+    python ex1.py --methods aeloru-fromscratch --device cpu   # 单跑从零训练组
+    # 长线抗遗忘推荐参数（ex1.1）：合并+余弦退火+逐轮衰减+加强睡眠
+    python ex1_long_line.py --methods lora,aeloru-safe,aeloru-default \\
+        --repeat 2 --steps 250 --merge-every 500 --lr-schedule 1 \\
+        --lr-decay-per-round 0.8 --sleep-intensity 2 --fs-relora-every 250
 
 @author JYIMU
 """
@@ -55,7 +64,6 @@ import argparse
 import warnings
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
-import random
 
 # 离线优先：数据集与模型均已在本地缓存
 os.environ.setdefault("HF_HUB_OFFLINE", "1")
@@ -199,7 +207,8 @@ def inject_aeloru_selected(model, layer_indices: List[int], cfg: AeloruConfig,
 
 def build_model(method: str, n_layers: int, device: str, lr: float,
                 n_labels: int = 2, pad_id: int = 0,
-                r: int = 8, alpha: float = 16.0):
+                r: int = 8, alpha: float = 16.0, merge_every: int = 0,
+                fs_relora_every: int = 0, fs_enable_sleep: int = 0):
     """构建待训练模型；返回 (model, 可训练参数量)。"""
     model = AutoModelForSequenceClassification.from_pretrained(
         MODEL_PATH, num_labels=n_labels, trust_remote_code=True)
@@ -233,6 +242,8 @@ def build_model(method: str, n_layers: int, device: str, lr: float,
             diagnostic_enabled=False,
             device=device,
         )
+        if merge_every > 0:
+            cfg.merge_every = merge_every
         inject_aeloru_selected(model, layer_indices, cfg)
         model.to(device)
         _freeze_base(model)
@@ -247,8 +258,11 @@ def build_model(method: str, n_layers: int, device: str, lr: float,
             diagnostic_enabled=False,
             device=device,
             homeostatic_enabled=True,
-            pem_space="output"
+            pem_space="output",
+            neural_dynamics_iterations=2,
         )
+        if merge_every > 0:
+            cfg.merge_every = merge_every
         inject_aeloru_selected(model, layer_indices, cfg)
         model.to(device)
         _freeze_base(model)
@@ -266,6 +280,9 @@ def build_model(method: str, n_layers: int, device: str, lr: float,
         hid = embed.embedding_dim
         net = FromScratchNet([hid] + [hid] * n_layers + [n_labels], cfg, device)
         model = FromScratchWrapper(embed, net, device)
+        # 保存 fromscratch 专属参数到 model 实例，供 run_method 读取
+        model.fs_relora_every = fs_relora_every
+        model.fs_enable_sleep = bool(fs_enable_sleep)
         model.to(device)
 
     else:
@@ -319,9 +336,9 @@ def make_fs_cfg(device: str, r: int, alpha: float, lr: float) -> AeloruConfig:
         lambda_lateral=0.9,
         lateral_lr=1e-5,
         lateral_decay=0.99,
-        merge_every=10 ** 9,                # 从零训练不做自动 ReLoRA 合并（由显式 relora_every 控制）
-        min_steps_between_sleep=10 ** 9,    # 关闭 DLAM 睡眠（非重点，避免额外不稳定性）
-        sleep_condition_threshold=10 ** 9,
+        merge_every=200,                
+        min_steps_between_sleep=100,    
+        sleep_condition_threshold=0.5,
         energy_eta=0.15,
         predictive_coding_rank=16,
         gamma_predictive=1.0,
@@ -415,7 +432,7 @@ def _recondition_layer(lay):
     for name in ("C_h", "C_hh", "C_x", "W_whiten"):
         buf = getattr(lay, name, None)
         if isinstance(buf, torch.Tensor) and buf.dim() == 2 and buf.shape[0] == buf.shape[1]:
-            j = 1e-2 * buf.diagonal().abs().max().clamp(min=1e-6)
+            j = 1e-4 * buf.diagonal().abs().max().clamp(min=1e-6)
             buf.add_(j * torch.eye(buf.shape[0], device=buf.device, dtype=buf.dtype))
 
 
@@ -466,12 +483,20 @@ def train_one_task(model, aeloru_layers: List[AeloruLayer], capture: ActivationC
                    loader: DataLoader, optimizer, device: str, steps: int,
                    method: str, mech_log: List[dict], task_name: str,
                    global_step: int, ortho_lambda: float = 0.1,
-                   grad_clip: float = 1.0, relora_every: int = 0) -> Tuple[List[float], int, dict]:
+                   grad_clip: float = 1.0, relora_every: int = 0,
+                   lr: float = 1e-4, lr_schedule: bool = False) -> Tuple[List[float], int, dict]:
     """在单个任务上训练若干步。返回 (loss 序列, 新的 global_step, 汇总统计)。"""
     lossf = nn.CrossEntropyLoss()
     # 可训练参数列表只构建一次（梯度裁剪每步都用到）。
     trainable_params = [p for p in model.parameters() if p.requires_grad]
     has_aeloru = bool(aeloru_layers)
+
+    # 每任务余弦学习率退火：任务末期 lr 降到 10%，减少后期梯度扰动
+    scheduler = None
+    if lr_schedule:
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer, T_max=steps, eta_min=lr * 0.1
+        )
 
     it = iter(loader)
     losses = []
@@ -504,6 +529,8 @@ def train_one_task(model, aeloru_layers: List[AeloruLayer], capture: ActivationC
         loss.backward()
         torch.nn.utils.clip_grad_norm_(trainable_params, grad_clip)
         optimizer.step()
+        if scheduler is not None:
+            scheduler.step()
 
         lv = loss.item()
         losses.append(lv)
@@ -682,7 +709,10 @@ def run_method(method: str, seq_labels, seq_tasks, val_loaders, train_loaders, t
 
     model, n_trainable = build_model(
         method, args.layers, device, args.lr,
-        n_labels=2, pad_id=tok.pad_token_id, r=args.r, alpha=args.alpha)
+        n_labels=2, pad_id=tok.pad_token_id, r=args.r, alpha=args.alpha,
+        merge_every=args.merge_every,
+        fs_relora_every=args.fs_relora_every,
+        fs_enable_sleep=args.fs_enable_sleep)
 
     aeloru_layers = [m for m in model.modules() if isinstance(m, AeloruLayer)]
     capture = ActivationCapture(model) if aeloru_layers else None
@@ -692,10 +722,19 @@ def run_method(method: str, seq_labels, seq_tasks, val_loaders, train_loaders, t
 
     log(f"  可训练参数: {n_trainable:,}   注入 AeloruLayer: {len(aeloru_layers)}", fh)
 
-    # 从零训练组：显式 ReLoRA 合并周期；未指定时按步数自动折半
+    # 从零训练组：显式 ReLoRA 合并周期；fromscratch 忽略 --merge-every，
+    # 只用专属 --fs-relora-every（默认 steps//2），与 PEFT 组的自动合并互不干扰
     relora_every = args.relora_every
-    if method == "aeloru-fromscratch" and relora_every <= 0:
-        relora_every = max(1, args.steps // 2)
+    if method == "aeloru-fromscratch":
+        if model.fs_relora_every > 0:
+            relora_every = model.fs_relora_every
+        else:
+            relora_every = max(1, args.steps // 2)
+        # 实验性开启睡眠（风险见 md：wrapper 非标准 transformers，可能报错）
+        model.do_sleep = bool(model.fs_enable_sleep)
+
+    # 每轮学习率衰减：一轮 = len(base_tasks) 个任务
+    round_len = T // args.repeat if args.repeat > 0 else T
 
     R = np.full((T, T), np.nan)
     zero_shot = np.zeros(T)       # 训练每个任务「之前」的零样本准确率 -> 用于 FWT
@@ -706,6 +745,11 @@ def run_method(method: str, seq_labels, seq_tasks, val_loaders, train_loaders, t
     t_start = time.perf_counter()
 
     for i in range(T):
+        # 每轮学习率自动衰减：第二轮复习用小步长，避免冲掉旧记忆
+        cur_lr = args.lr * (args.lr_decay_per_round ** (i // round_len))
+        for g in optimizer.param_groups:
+            g["lr"] = cur_lr
+
         # 训练前的零样本评估：衡量模型面对「尚未学习的新分布」时的即时表现
         zero_shot[i] = evaluate(model, val_loaders[seq_tasks[i]], device)
 
@@ -713,13 +757,15 @@ def run_method(method: str, seq_labels, seq_tasks, val_loaders, train_loaders, t
         losses, global_step, agg = train_one_task(
             model, aeloru_layers, capture, train_loaders[seq_tasks[i]], optimizer,
             device, args.steps, method, mech_log, seq_labels[i], global_step,
-            ortho_lambda=args.ortho_lambda, relora_every=relora_every)
+            ortho_lambda=args.ortho_lambda, relora_every=relora_every,
+            lr=cur_lr, lr_schedule=bool(args.lr_schedule))
         task_losses[seq_labels[i]] = losses
 
         # 任务边界：DLAM 睡眠巩固（模拟"睡眠"把当前任务压入原型记忆）
         # 从零训练组关闭睡眠（wrapper.do_sleep=False），避免对非 transformers 模型调用失败
         if aeloru_layers and getattr(model, "do_sleep", True):
-            sleep_events += trigger_sleep_consolidation(model, aeloru_layers)
+            for _ in range(args.sleep_intensity):
+                sleep_events += trigger_sleep_consolidation(model, aeloru_layers)
 
         # 回测所有已见任务
         for j in range(i + 1):
@@ -902,6 +948,18 @@ def main():
                     help="正交惩罚 + SPHeRe 结构保持损失的权重（Aeloru 专用）")
     ap.add_argument("--relora-every", type=int, default=0,
                     help="从零训练组的 ReLoRA 合并周期(步)；0=按 steps//2 自动")
+    ap.add_argument("--merge-every", type=int, default=0,
+                    help="全局 ReLoRA 合并周期(步)，0=使用各配置默认值；长线推荐 500")
+    ap.add_argument("--lr-schedule", type=int, default=1, choices=[0, 1],
+                    help="是否启用每任务余弦学习率退火：1=开，0=关")
+    ap.add_argument("--lr-decay-per-round", type=float, default=1.0,
+                    help="每完成一轮任务序列后的学习率衰减系数，长线推荐 0.8")
+    ap.add_argument("--sleep-intensity", type=int, default=1,
+                    help="每任务后睡眠巩固强度(调用次数)，长线推荐 2~3")
+    ap.add_argument("--fs-relora-every", type=int, default=0,
+                    help="aeloru-fromscratch专属ReLoRA合并周期；0=自动取steps//2；长线建议250(每任务合并一次)")
+    ap.add_argument("--fs-enable-sleep", type=int, default=0, choices=[0, 1],
+                    help="是否给fromscratch打开睡眠巩固；0关闭(原默认)，1开启(实验性，可能报错)")
     ap.add_argument("--repeat", type=int, default=2,
                     help="长线循环轮数：把任务序列重复 N 次（同任务多次出现，测巩固/回访）")
     ap.add_argument("--runs", type=int, default=0,
