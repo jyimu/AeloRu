@@ -1,0 +1,5 @@
+﻿method,ACC_mean,BWT_mean,FWT_mean,Forgetting_mean,ACC_std,BWT_std,FWT_std,Forgetting_std,params,sleep
+lora,0.594,-0.0093,0.0059,0.0306,0.0152,0.01,0.0334,0.0085,59136,0
+aeloru-safe,0.5766,0.002,0.0044,0.0184,0.0091,0.0063,0.0275,0.0054,66304,40
+aeloru-default,0.5841,0.0054,0.0075,0.0206,0.0136,0.0078,0.0316,0.0071,66304,40
+aeloru-fromscratch,0.5353,-0.0194,0.0532,0.0382,0.0318,0.0252,0.0208,0.0232,66306,0
