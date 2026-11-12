@@ -4,7 +4,7 @@
 
 Beyond Low-Rank: Dynamic Plasticity through Amplitude-Direction Decoupling
 
-Paper: [AeloRu: Adaptive Elastic Learning with Orthogonal Robust Units](paper/paper.md)
+Paper: [AeloRu: Adaptive Elastic Learning with Orthogonal Robust Units](paper/paper_en.md)
 
 中文版：[README_zh.md](README_zh.md)
 
@@ -40,7 +40,7 @@ Evaluated on **Qwen2.5-0.5B** under an extreme concept-drift protocol (SST-2 →
 - **Cost**: only **+22.1%** extra training time
 - **Geometry**: inter-dimension correlation −46% ~ −65%, condition number −45% ~ −69%, rank-budget utilization 43% ~ 61% → 71% ~ 85%, task selectivity −78% ~ −86%
 
-The gains stem from eliminating low-rank subspace redundancy rather than regularization alone. The paper further decomposes feature coupling into functional vs. redundant parts, runs a PEM dose–response experiment, and documents 13 blocking defects (and fixes) found while porting cognitive-science modules onto a pretrained Transformer. (Full details in [paper.md](paper/paper.md).)
+The gains stem from eliminating low-rank subspace redundancy rather than regularization alone. The paper further decomposes feature coupling into functional vs. redundant parts, runs a PEM dose–response experiment, and documents 13 blocking defects (and fixes) found while porting cognitive-science modules onto a pretrained Transformer. (Full details in [paper.md](paper/paper_en.md).)
 
 ---
 
@@ -54,7 +54,7 @@ The gains stem from eliminating low-rank subspace redundancy rather than regular
 | P3 | Training on real data & writing paper | ✅ Done ([paper](paper/paper.md)) |
 | P4 | Asynchronous PEFT architecture | 🔄 Doing |
 
-### Version Progression ([latest progress](paper/paper.md))
+### Version Progression ([latest progress](paper/paper_en.md))
 
 - **V1** — Core AeloRu layer, HongWen state machine, ReLoRA merge, Hebbian-Fisher → [V1.md](V1/V1.md) · [`V1/README.md`](V1/README.md)
 - **V2** — Dual 1-D HGF plasticity gating, closed-form CE gradient, PEM/DLAM integration → [V2.md](V2/V2.md) · [`V2/HGF_CE.md`](V2/HGF_CE.md)

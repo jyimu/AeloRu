@@ -1,8 +1,9 @@
 # Aeloru（Adaptive Elastic Learning with Orthogonal Robust Units，正交鲁棒单元的自适应弹性学习）
 
-jinmuyi
-![head map](Aeloru_haed_map.jpeg)
-### 摘要
+![系统架构示意](./figures/Aeloru_haed_map.jpeg)
+
+[English](./paper_en.md)
+## 摘要
 
 大语言模型（LLM）已在各类自然语言任务中展现出卓越能力，但对十亿级参数模型进行全参数微调会产生极高的计算与内存成本，限制了资源受限场景下的可用性。低秩适配（LoRA）通过冻结预训练主干参数、仅优化低秩增量权重的方式，成为主流的参数高效微调（PEFT）范式，且不会引入额外的推理延迟。然而，现有LoRA变体仍存在根本性局限：标准LoRA受限于刚性低秩约束与耦合的幅值-方向优化，性能始终与全参数微调存在差距；DoRA等结构改进方案部分缩小了这一差距，但缺乏参数层面的自适应可塑性调控；VeRA等面向效率的变体在极端参数压缩下，面对复杂推理任务会出现严重的表达能力瓶颈。此外，现有绝大多数PEFT方法均从统计优化视角设计，很少借鉴支撑生物大脑高效学习机制的神经科学洞见。
 
@@ -10,16 +11,16 @@ jinmuyi
 为填补上述空白，我们提出**Aeloru（正交鲁棒单元的自适应弹性学习）**，这是一套受神经科学启发的低秩适配框架，整合了多种协同的认知学习机制，同时保持与消费级GPU兼容的内存效率。Aeloru的核心设计包括：
 1. **Hi-DoRA双向幅值调制低秩结构**：将行、列维度的幅值适配与方向更新解耦，以可忽略的参数开销提升表征能力；
 2. **双一维 HGF 可塑性门控**：利用低秩增量的行列可分离性，把 $O(d_{out}d_{in})$ 的二维参数级 Fisher 掩码降维为两条一维 HGF 精度向量（$O(d_{out}+d_{in})$，实测降低约 448 倍），以零梯度开销自适应调节参数可塑性，在保护已巩固的预训练知识的同时，将更新导向任务相关子空间；
-3. **四阶段红温认知状态机**：调度探索、冲突、锚定、固化的学习循环，模拟生物学习的快慢双时间尺度；
+3. **HongWen 四阶段认知状态机**：调度探索、冲突、锚定、固化的学习循环，模拟生物学习的快慢双时间尺度；
 4. **基于层级高斯滤波（HGF）的闭式精度传播与波动率耦合动态学习率**：以低成本实现自然梯度估计，并自动适配训练过程中的概念漂移；
 5. **DLAM谱滤波睡眠机制**：执行离线记忆巩固与弱连接剪枝，提升泛化能力并缓解灾难性遗忘。
 
 Aeloru同时支持周期性ReLoRA权重合并与量化参数存储，内存占用与标准LoRA相当。我们在Qwen2.5-0.5B上构造了极端的概念漂移评测协议（SST-2→MRPC→QNLI→RTE→CoLA顺序切换、训练后永不回访），并用**四个随机种子**（42 / 9589 / 6519 / 1412）系统评估其抗遗忘与特征解耦能力。实验表明：在同等参数量预算下，Aeloru将灾难性遗忘从LoRA的0.0462降至0.0231（**降低50.0%**，配对t检验**p<0.05**），后向迁移（BWT）由−0.0357改善至−0.0115；该收益具有顺序普适性——把5个任务单元重复两遍并反转任务顺序（10段长程流、4种子）后，遗忘降低依然稳定（正序−39.9%/−32.7%，逆序−29.6%/−35.6%），且抗遗忘收益与LoRA在各任务上的遗忘压力显著正相关（r=0.55），分任务的精度—记忆分化由"位置效应+特征重叠"共同决定，而非特定数据集的偶然结果；但在本小样本GLUE协议下，由于种子间方差较大（LoRA自身标准差即达±0.0164），整体平均准确率对比标准LoRA**无统计显著差异**（3种子下p=0.135，4种子下最优配置甚至显著更低）。因此本文**不将精度提升作为主张**，而是把核心证据建立在两项跨种子稳健的发现上：抗遗忘与后向迁移的显著改善，以及低秩子空间的几何重构。为检验这一归因，我们进一步把特征耦合按"是否携带任务信息"分解为功能性与冗余两部分，并做PEM剂量—反应实验：结果发现**总耦合的降低并非抗遗忘的充分或必要条件**（LoRA总耦合全场最高0.3070却遗忘最低0.0055，因其功能性耦合绝对量也最高0.0535），而PEM模块在低秩空间中施加的是**精度加权、无差别的**去相关压力，随剂量单调抬高冗余耦合（`coup_red` +56%）并单调恶化遗忘（+28%）却无精度收益。据此我们修正了初稿对PEM的辩护，将其定位为从零训练认知模型的组件，并在LLM微调预设中默认关闭——真正与任务表现同向的是功能性耦合的绝对量，而非总耦合的高低。因此本文面向PEFT持续学习的推荐配置为`aeloru-safe`（关闭PEM）。进一步，我们在从零训练场景下把唯一变量设为PEM的作用空间，得到清晰的边界：全输出空间下PEM使精度+2.90个百分点（$\gamma_{predictive}=10$），$r=16$ 时衰减至+1.17个百分点，而低秩空间下为−1.40个百分点；但**两种空间下PEM都会抬高耦合、降低有效秩**——即其收益来自拟合调制而非解耦；同时模块消融显示HGF门控是"可塑性分配"场景的第一支柱（移除后相关性+150%、有效秩腰斩），而SPHeRe是"子空间坍缩"场景的第一支柱，WTA的作用随维度充裕度反转。**神经科学启发模块的价值高度依赖场景，不存在普适的"更好组件"。**本文同时公开了把认知科学模块移植到预训练Transformer时定位到的13项阻断性缺陷及其修正，其中"全输出空间预测编码破坏预训练表示"与"稳态增益量纲错误"两类问题对同类工作具有普遍警示意义。本工作打通了受神经科学启发的认知学习原理与参数高效模型适配之间的壁垒，为消费级硬件上的大语言模型微调提供了高性能、可扩展的解决方案。
 
-我们的仓库[Aeloru(https://github.com/jyimu/AeloRu)](https://github.com/jyimu/AeloRu)
+我们的代码与全部实验数据已开源于 [Aeloru](https://github.com/jyimu/AeloRu)。
 
 ---     
-### 1 引言
+## 1 引言
 在海量语料上预训练的大语言模型（LLM）已成为现代自然语言处理的基础设施，在常识推理、数学求解等各类任务上均取得了当前最优性能。然而，通过全参数微调将这些十亿级参数模型适配到下游任务时，需要更新模型全部参数，会带来极高的计算与内存开销——例如，微调一个65B参数的大语言模型需要超过780GB的GPU显存。这一极高成本推动了参数高效微调（PEFT）方法的发展，这类方法仅训练少量参数，同时冻结预训练主干网络。
 
 在现有PEFT范式中，低秩适配（LoRA）凭借实现简洁、零推理延迟、性能优异的特点得到了广泛应用。LoRA将权重更新近似为两个低秩矩阵的乘积，将可训练参数量降低了数个数量级。但后续研究发现，标准LoRA始终存在局限：在复杂任务上，其性能与全参数微调始终存在稳定差距；由于幅值与方向更新耦合，优化动力学刚性较强；在小样本场景下，样本效率有限。
@@ -37,11 +38,11 @@ Aeloru同时支持周期性ReLoRA权重合并与量化参数存储，内存占�
 我们的核心贡献总结如下：
 - **Hi-DoRA双向幅值调制**：基于DoRA的权重分解思路，我们为输入与输出维度分别引入独立的可学习幅值向量，进一步解耦幅值与方向的优化空间。该设计以不到0.01%的额外参数量，提升了低秩适配器的表征能力。
 - **双一维 HGF 可塑性门控（Fisher 降维）**：我们指出低秩适配场景下参数级 Fisher 门控存在根本的代价失衡——被门控的 $\Delta W$ 只有 $O(r(d_{out}+d_{in}))$ 个自由度，却需要 $O(d_{out}d_{in})$ 的开销去估计其重要性。为此我们提出闭环的双一维门控：HGF 闭式精度以零梯度开销维护 $\pi_{out},\pi_{in}$ 两条一维精度向量，其外积近似二维 Fisher 并对赫布更新与权重增量同时门控；赫布痕迹反过来作为精度代理、冲突信号与动态学习率的输入，形成双向闭环。该设计把门控复杂度从 $O(d_{out}d_{in})$ 降至 $O(d_{out}+d_{in})$，并与 Hi-DoRA 幅值调制构成结构同构的"双一维调制"统一架构。
-- **红温四阶段认知状态机**：我们将训练过程划分为交替进行的阶段：自由探索（赫布主导）、认知冲突检测、梯度锚定（反向传播主导）与赫布固化。这一分阶段调度模拟了生物大脑双时间尺度的学习节律，平衡探索与利用，提升收敛质量。
+- **HongWen 四阶段认知状态机**：我们将训练过程划分为交替进行的阶段：自由探索（赫布主导）、认知冲突检测、梯度锚定（反向传播主导）与赫布固化。这一分阶段调度模拟了生物大脑双时间尺度的学习节律，平衡探索与利用，提升收敛质量。
 - **基于HGF的闭式自然梯度与动态学习率**：借鉴层级高斯滤波（HGF）框架，我们实现了基于精度传播的闭式费雪估计，替代计算成本高昂的梯度平方费雪计算，降低了计算开销。我们进一步引入波动率耦合的动态学习率调节，基于预测误差波动率自动调制更新强度，以适配概念漂移、提升训练稳定性。
 - **DLAM谱滤波睡眠机制**：我们引入由子空间条件数触发的离线睡眠阶段，在此阶段对低秩赫布轨迹执行谱滤波，以巩固强记忆、剪枝薄弱的冗余连接。该机制提升了模型泛化能力并缓解灾难性遗忘，还可选择加入跨层关联绑定以增强层间特征复用。
 
-我们在Qwen2.5-0.5B上构造了极端的概念漂移评测协议（5个GLUE任务顺序切换、训练后永不回访），系统评估Aeloru的抗遗忘能力与特征解耦特性。结果表明：在同等参数量预算下，Aeloru将遗忘率降低85.9%、BWT由负转正，且最终准确率不降反升；进一步的几何分析表明，这一收益来源于低秩子空间冗余的大幅消除（相关性−65%、条件数−69%、秩利用率+38%~+65%）而非单纯的正则化效应。除算法本身外，本文还完整公开了把认知科学模块移植到预训练Transformer时定位到的13项阻断性缺陷及其修正方案（第6章），其中若干条对该研究路线具有普遍的警示意义。
+我们在Qwen2.5-0.5B上构造了极端的概念漂移评测协议（5个GLUE任务顺序切换、训练后永不回访，并以四个随机种子验证），系统评估Aeloru的抗遗忘能力与特征解耦特性。结果表明：在同等参数量预算下，Aeloru将灾难性遗忘显著降低（4种子下由LoRA的0.0462降至0.0231，降低50.0%，配对t检验$p<0.05$），后向迁移（BWT）亦同步改善；但在本小样本协议下，整体平均准确率与LoRA无统计显著差异，故本文不主张精度优势（多种子分析详见第4章）。进一步的几何分析表明，抗遗忘收益伴随低秩子空间冗余的大幅消除（相关性−65%、条件数−69%、秩利用率+38%~+65%），且该几何重构在不同秩、不同协议下方向一致，而非单纯的正则化效应。除算法本身外，本文还完整公开了把认知科学模块移植到预训练Transformer时定位到的13项阻断性缺陷及其修正方案（第6章），其中若干条对该研究路线具有普遍的警示意义。
 
 本文余下部分结构如下：第2节回顾参数高效微调与神经科学启发学习机制的相关工作；第3节详细阐述Aeloru的架构设计与核心机制；第4节介绍实验设置与概念漂移基准上的结果，并逐项验证六个认知机制是否真实生效；第5节开展特征解耦的几何分析与消融实验；第6节记录实现缺陷的诊断与修正；第7节总结全文并展望未来方向。
 
@@ -110,7 +111,7 @@ Aeloru同时支持周期性ReLoRA权重合并与量化参数存储，内存占�
 
 ### 3.1 Hi-DoRA 双向幅值调制低秩结构
 
-<img src="hi_dora.jpeg" style="float: left; margin-left: 20px;" width="75%" />
+<img src="./figures/hi_dora.jpeg" style="float: left; margin-left: 20px;" width="75%" />
 标准LoRA将权重更新约束为统一低秩分解形式，存在幅值与方向耦合、维度适配能力不足的固有局限；DoRA虽通过权重幅值-方向分解缩小了与全微调的差距，但仅对输出维度做单向全局幅值调制，无法匹配输入、输出维度的异质特征重要性。针对该问题，我们提出Hi-DoRA（Hierarchical Directional and Magnitude Adaptation）双向幅值调制低秩结构，在极低参数开销下完全解耦幅值与方向的优化空间，提升低秩适配器的表征能力。
 
 #### 3.1.1 基础低秩适配回顾
@@ -136,7 +137,7 @@ $$\Delta W' = \left( m_x m_y^T \right) \odot \Delta W$$
 **ReLoRA兼容性**：Hi-DoRA与周期性权重合并机制完全兼容。每次ReLoRA合并时，经幅值调制的完整增量$\Delta W'$被累积到外置权重缓冲区$W_{acc}$中，随后幅值向量重置为1，低秩矩阵重新初始化，开启新一轮子空间探索。
 
 <p align="center">
-  <img src="./Aeloru_D1_LowRank_Modulation.PNG" alt="详图 D1：低秩增量的构造与双一维调制叠加" width="100%" /><br/>
+  <img src="./figures/Aeloru_D1_LowRank_Modulation.PNG" alt="详图 D1：低秩增量的构造与双一维调制叠加" width="100%" /><br/>
   <em>图 3.7　详图 D1：低秩增量 $\Delta W = (\alpha/r)BA$ 的构造，以及幅值调制 $m_x m_y^\top$ 与可塑性调制 $p_{out}p_{in}^\top$ 的双一维叠加（对应 §3.1 与 §3.2.2 的统一架构）</em>
 </p>
 
@@ -150,7 +151,7 @@ $$\Delta W' = \left( m_x m_y^T \right) \odot \Delta W$$
 
 #### 3.2.1 低秩 Hebbian 更新规则
 
-<img src="./Hebb_up.png" alt="Hebb_up.png" width="75%" />
+<img src="./figures/Hebb_up.png" alt="Hebb_up.png" width="75%" />
 基于赫布学习"共同放电的神经元，突触连接同步增强"的核心原理，针对低秩适配结构设计轻量化在线更新规则，无需反向传播即可实现无监督特征关联学习，作为反向传播的补充学习通路。
 
 对于批次输入激活均值 $\bar{x} \in \mathbb{R}^{d_{in}}$ 与输出激活均值 $\bar{y} \in \mathbb{R}^{d_{out}}$，低秩矩阵 A、B 的 Hebbian 更新量为：
@@ -181,7 +182,7 @@ $$
 
 #### 3.2.2 从二维 Fisher 掩码到双一维 HGF 精度门控
 
-  <img src="HGF_map.svg" alt="HGF_map.svg" style="float: left; margin-left: 20px;width: 75%;" />
+  <img src="./figures/HGF_map.svg" alt="HGF_map.svg" style="float: left; margin-left: 20px;width: 65%;" />
 
 ##### 1. 传统二维 Fisher 掩码的代价失衡
 
@@ -311,7 +312,7 @@ $$p = \exp\!\big[-(\gamma\,\pi + \lambda\,\mathrm{proto})\big]$$
 其中 $\pi$ 每步更新（快，响应当前激活分布），$\mathrm{proto}$ 在每次睡眠后更新（慢，累积跨任务重要性）。二者叠加使门控同时具备**实时响应**与**长期记忆**：一个在历史上被反复使用的维度，即使当前激活方差暂时偏低，也不会被误判为"可随意修改"。实验一中 $\mathrm{proto}_{out}$ 从 0 单调累积到 0.2550（§4.3），证实该慢速通路真实生效。
 
 <p align="center">
-  <img src="./Aeloru_D2_HGF_Gate_HebbianLoop.PNG" alt="详图 D2：HGF 门控统计量与 Hebbian 双向闭环" width="100%" /><br/>
+  <img src="./figures/Aeloru_D2_HGF_Gate_HebbianLoop.PNG" alt="详图 D2：HGF 门控统计量与 Hebbian 双向闭环" width="100%" /><br/>
   <em>图 3.8　详图 D2：可塑性门控的统计量来源（$\sigma_y^2$、$C_x,\mu_x$、proto）、$\pi\!\to\!p$ 的计算，以及"HGF 精度 → 可塑性门控 → Hebbian 更新"的双向闭环</em>
 </p>
 
@@ -344,7 +345,7 @@ $$\mathcal{L}_{ortho} = \lambda \cdot \|\Delta W^T W_0\|_F^2$$
 大权重矩阵场景下采用随机投影 Hutchinson 估计近似计算，进一步降低计算开销。
 
 <p align="center">
-  <img src="./Aeloru_D7_Constraints_Objective.PNG" alt="详图 D7：四项约束、施加时机与训练目标" width="100%" /><br/>
+  <img src="./figures/Aeloru_D7_Constraints_Objective.PNG" alt="详图 D7：四项约束、施加时机与训练目标" width="100%" /><br/>
   <em>图 3.9　详图 D7：四项硬约束／正则（正交惩罚、SPHeRe 低维结构投影、能量预算、BCM 自适应饱和上限）的公式、施加时机与最终训练目标 $L = L_{task} + L_{ortho} + L_{sphere}$</em>
 </p>
 
@@ -374,14 +375,14 @@ $$\mathcal{L}_{ortho} = \lambda \cdot \|\Delta W^T W_0\|_F^2$$
 4. **优雅降级**。任一统计量缺失时（稳态关闭、白化关闭），系统回退到 Hebbian 冲击代理，门控永不失效。
 
 <p align="center">
-  <img src="./Aeloru_D3_PostStep_Update.PNG" alt="详图 D3：post_step_update 完整十步时序" width="100%" /><br/>
+  <img src="./figures/Aeloru_D3_PostStep_Update.PNG" alt="详图 D3：post_step_update 完整十步时序" width="100%" /><br/>
   <em>图 3.10　详图 D3：每步 $post\_step\_update(\cdot)$ 的完整十步时序——GHL 注入 → Hebbian 累积 → flush 固化 → 侧向连接 → 波动率学习率 → 冲突检测 → 在线统计 → 睡眠判定 → 刷新门控 → ReLoRA 合并</em>
 </p>
 
-### 3.3 红温("HongWen")四阶段认知状态机
+### 3.3 HongWen 四阶段认知状态机
 
-![alt text](HONGWEN.jpeg)
-生物大脑的学习过程遵循“探索-冲突-修正-巩固”的周期性节律，存在快速无监督学习与慢速有监督修正的双时间尺度；而现有PEFT方法普遍采用固定学习率与统一训练策略，无法自适应切换学习模式。受认知神经科学的双系统学习理论启发，我们设计红温四阶段认知状态机，动态调度Hebbian快速探索与反向传播慢速修正，平衡搜索效率与收敛精度。
+![alt text](./figures/HONGWEN.jpeg)
+生物大脑的学习过程遵循“探索-冲突-修正-巩固”的周期性节律，存在快速无监督学习与慢速有监督修正的双时间尺度；而现有PEFT方法普遍采用固定学习率与统一训练策略，无法自适应切换学习模式。受认知神经科学的双系统学习理论启发，我们设计HongWen 四阶段认知状态机，动态调度Hebbian快速探索与反向传播慢速修正，平衡搜索效率与收敛精度。
 
 ##### 3.3.1 四阶段认知状态定义
 状态机包含四个循环切换的认知阶段，分别对应生物学习的不同认知模式：
@@ -390,7 +391,7 @@ $$\mathcal{L}_{ortho} = \lambda \cdot \|\Delta W^T W_0\|_F^2$$
    - 核心目标：快速大范围探索任务相关特征子空间，扩大搜索范围
    - 参数配置：Hebbian学习率拉满，全局可塑性放开，正交惩罚系数较低
 
-2. **认知冲突期（RED，红温）**
+2. **认知冲突期（RED）**
    - 触发条件：学习过程出现持续的梯度波动或预测误差上升，对应认知失调状态
    - 核心目标：检测学习瓶颈，触发学习模式切换
    - 联动操作：强制执行一次ReLoRA权重合并，沉淀已有知识，重置低秩适配器，为精准修正做准备
@@ -416,15 +417,15 @@ $$C = 0.6 \cdot v_\pi + 0.4 \cdot (1-H)$$
 
 ##### 3.3.3 状态转换规则与时间尺度
 状态转换遵循固定步数+阈值触发的混合规则，保证训练稳定性与自适应能力的平衡：
-- 探索期持续$N_{explore}$步后，若冲突分数超过阈值$\tau_{red}$，则进入红温期；
-- 红温期持续最短$N_{red,min}$步后，自动转入锚定期，保证冲突充分暴露；
+- 探索期持续$N_{explore}$步后，若冲突分数超过阈值$\tau_{red}$，则进入认知冲突（RED）期；
+- 认知冲突（RED）期持续最短$N_{red,min}$步后，自动转入锚定期，保证冲突充分暴露；
 - 锚定期持续$N_{anchor}$步且连续10步梯度范数低于收敛阈值$\tau_{anchor}$，则转入固化期；
 - 固化期持续$N_{solid}$步后，重新回到探索期，开启下一轮认知循环。
 
 时间尺度上遵循生物学习的快慢节律，设置探索步数:锚定步数约为100:1，既保证充分的无监督特征探索，又避免反向传播带来的过高计算开销，整体训练吞吐量与标准LoRA基本持平。
 
 <p align="center">
-  <img src="./Aeloru_D4_HongWen_StateMachine.PNG" alt="详图 D4：红温四阶段认知状态机" width="100%" /><br/>
+  <img src="./figures/Aeloru_D4_HongWen_StateMachine.PNG" alt="详图 D4：HongWen 四阶段认知状态机" width="100%" /><br/>
   <em>图 3.11　详图 D4：冲突分数的计算、EXPLORE / RED / ANCHOR / SOLID 四状态的定义与转移条件，以及各状态对 Hebbian 学习率、GHL 权重、噪声尺度与 $\lambda_{ortho}$ 的调制</em>
 </p>
 
@@ -477,7 +478,7 @@ $$
 
 ### 3.5 基于DLAM的跨模态异联想绑定与谱滤波睡眠
 
-<img src="./DLAM.jpeg" alt="DLAM" width="50%" style="float: left; margin-left: 20px;" /><br/>
+<img src="./figures/DLAM.jpeg" alt="DLAM" width="50%" style="float: left; margin-left: 20px;" /><br/>
 
 生物睡眠阶段的离线记忆巩固不仅执行突触修剪与噪声清理，更关键的是实现跨模态知识的整合与绑定——将分布式存储在多脑区的多感官表征统一为连贯的全局记忆。现有PEFT方法普遍缺乏这种离线正则与跨层协调机制，导致层间特征复用率低、灾难性遗忘严重。受 **Dreaming L-directional Associative Memory (DLAM)** 统计力学理论的启发，我们设计了一套层内谱滤波与跨层异联想绑定共存的统一能量机制，使离线睡眠成为提升泛化与抗遗忘的核心环节。
 
@@ -552,7 +553,7 @@ $$
 整体睡眠阶段的计算开销占总训练开销的3%以内，对训练吞吐量影响极小。
 
 <p align="center">
-  <img src="./Aeloru_D5_DLAM_Sleep.PNG" alt="详图 D5：DLAM 睡眠与跨层异联想绑定" width="100%" /><br/>
+  <img src="./figures/Aeloru_D5_DLAM_Sleep.PNG" alt="详图 D5：DLAM 睡眠与跨层异联想绑定" width="100%" /><br/>
   <em>图 3.12　详图 D5：DLAM 睡眠全流程——条件触发、层内谱滤波核 $A(t_{opt})=(1+t_{opt})(I+t_{opt}\Sigma)^{-1}$、弱连接剪枝、原型记忆巩固与跨层异联想绑定 $H_{LAM}$</em>
 </p>
 
@@ -560,7 +561,7 @@ $$
 
 ### 3.6 预测熵最大化神经动态（PEM Neural Dynamics）
 
-<img src="./PEM.jpeg" alt="PEM" width="75%"/>
+<img src="./figures/PEM.jpeg" alt="PEM" width="70%"/>
 低秩适配器的前馈传播在特征子空间中引入了潜在的结构冗余：低秩矩阵 $B$ 和 $A$ 的乘积可能产生高度相关的输出维度，导致有效秩进一步降低与特征坍塌。受 **Predictive Entropy Maximization (PEM)** 范式网络的启发，我们在Aeloru的低秩特征空间（$r$ 维）中引入一套双时间尺度的预测神经动态，通过局部可塑性与自适应侧向抑制实现特征解耦，同时强制执行源信号域的几何约束。
 
 #### 3.6.1 从输出熵到可解释 surrogate 目标
@@ -662,7 +663,7 @@ PEM神经动态并非孤立模块，而是与Aeloru的其他机制形成深度�
 通过将PEM的预测熵最大化机制嵌入低秩适配器，Aeloru在消费级GPU的显存约束下，实现了生物可信的特征解耦与源域约束，显著提升了复杂推理任务中的表征质量。
 
 <p align="center">
-  <img src="./Aeloru_D6_PEM_Whitening.PNG" alt="详图 D6：PEM 神经动态与输入白化三条分支" width="100%" /><br/>
+  <img src="./figures/Aeloru_D6_PEM_Whitening.PNG" alt="详图 D6：PEM 神经动态与输入白化三条分支" width="100%" /><br/>
   <em>图 3.13　详图 D6：三条 PEM／白化分支——分支 A 低秩神经动态（默认路径）、分支 B 输出空间神经动态（仅 $cognitive\_model$ 预设）、分支 C 输入动态白化 $W_{whiten}$，及其数值稳定性措施与实测边界</em>
 </p>
 
@@ -880,7 +881,7 @@ LoRA 自身的种子间标准差为 ±0.0181，而各配置与 LoRA 的 ACC 差�
 2. **波动率单调下降**：$\exp(\omega)$ 从 1.0011 单调降至 0.4534，意味着有效学习率 $\eta_{eff}=\eta_0/\exp(\omega)$ 自动提升约 **2.2 倍**，与 §3.4.2 的设计一致，且这一过程完全无需人工 schedule。
 3. **DLAM 原型记忆跨任务累积**：从 0 单调增长到 0.2550（峰值 0.2831 出现在 MRPC 之后），并在任务边界处呈阶梯状跃升，与"睡眠巩固"的预期吻合。
 4. **正交惩罚真实生效**：$\mathcal{L}_{ortho}$ 从 0.0031 上升两个数量级，且在睡眠时刻出现 11.6 的尖峰——这是睡眠阶段谱滤波后权重突变导致的瞬时方向偏移，随后被迅速优化回落。若该损失项未被接入计算图，则不会出现这种"尖峰—回落"形态。
-5. **状态机真实切换**：1,250 步中 solid / explore / anchor / red 分别占 68 / 31 / 16 / 15 个采样点，四个状态均被访问；红温期集中在每个任务的前中段（对应新分布冲击），固化期集中在任务后段（对应知识沉淀），呈现出清晰的节律结构。
+5. **状态机真实切换**：1,250 步中 solid / explore / anchor / red 分别占 68 / 31 / 16 / 15 个采样点，四个状态均被访问；认知冲突（RED）期集中在每个任务的前中段（对应新分布冲击），固化期集中在任务后段（对应知识沉淀），呈现出清晰的节律结构。
 6. **GHL 方向信号随损失翻转**：从 0 经 +0.2463 到 −0.2815，说明全局方向引导在损失下降与上升阶段施加了符号相反的调制。
 
 ---
@@ -1419,7 +1420,7 @@ AeloruConfig.cognitive_model(r=16, lora_alpha=32) # 从零训练认知模型
 
 ### 6.2 修正带来的性能变化
 
-修复后 `aeloru-default` 在概念漂移流上的 ACC 由 0.5311 提升到 **0.6059**（+7.5 个百分点），遗忘由 0.0273 降到 **0.0076**。这一提升主要来自：(i) 默认路径改用低秩 PEM，避免了全输出空间对表示的破坏；(ii) 稳态增益量纲修正。
+修复后 `aeloru-default` 在概念漂移流上的 ACC 由 0.5311 提升到 **0.6059**（+7.5 个百分点），遗忘由 0.0273 降到 **0.0076**（该对比基于 seed=42 单种子；该数值已被第 4 章的 4 种子结论取代——Aeloru-safe 遗忘 0.0231、相对 LoRA 降低 50.0%）。这一提升主要来自：(i) 默认路径改用低秩 PEM，避免了全输出空间对表示的破坏；(ii) 稳态增益量纲修正。
 
 ### 6.3 一处未获数据支持的文档预期
 
@@ -1449,13 +1450,13 @@ AeloruConfig.cognitive_model(r=16, lora_alpha=32) # 从零训练认知模型
 1. **抗遗忘（核心收益，跨 4 个种子稳健）**：遗忘率从 LoRA 的 0.0437 降至 0.0259（**−40.7%**，配对 t 检验 $p=0.033$），BWT 由 −0.0319 改善至 −0.0141（$p=0.026$）；第一个任务的累计遗忘从 0.1792 降至 0.1050。该收益**不依赖任务顺序**：在 10 段长程重复流上，正序/逆序下遗忘降低分别为 39.9% / 32.7%（safe）与 32.7% / 35.6%（default），且逐任务收益与 LoRA 的遗忘压力显著正相关（$r=0.55$，§4.2.4）。**须同时如实指出：本协议下 Aeloru 的平均准确率与 LoRA 无统计显著差异（3 种子 $p=0.135$；4 种子下 safe 甚至显著更低，$p=0.039$），本文不主张精度优势。**
 2. **机制真实生效**：六项内部机制均展现出非退化的动态行为，包括双向门控的异步演化、波动率单调下降 2.2 倍、原型记忆跨任务累积、正交惩罚的睡眠尖峰、状态机四相位轮转。
 3. **几何解释**：Aeloru 将低秩子空间的平均相关性降低 46%–65%、条件数降低 45%–69%、秩预算利用率从 43%–61% 提升到 71%–85%，任务选择性降低 78%–86%。冗余与遗忘在 18 组数据点上呈现一致的负相关。
-4. **代价**：额外 22.1% 的训练时间，可训练参数 +12.1%，无推理期开销（增量可合并）。
+4. **代价**：约 29%–30% 的额外训练时间（4 种子均值），可训练参数 +12.1%，无推理期开销（增量可合并）。
 5. **耦合性质的再认识**：把特征耦合按"是否携带任务信息"分解后（§5.10），我们发现**总耦合的降低并非抗遗忘的充分或必要条件**——LoRA 的总耦合全场最高（0.3070）却遗忘最低（0.0055），因为其功能性耦合绝对量也最高（0.0535 vs 0.0353）；而 PEM 随剂量单调抬高冗余耦合（`coup_red` +56%）并单调恶化遗忘（+28%），未换来精度收益。真正与任务表现同向的是**功能性耦合的绝对量**。据此我们修正了初稿中对 PEM 的辩护，并将其定位为从零训练认知模型的组件而非低秩 LLM 微调组件。
 6. **场景边界可被实验定位，且机制贡献随场景反转**（§5.11）：在从零训练场景下把唯一变量设为 PEM 的作用空间，其准确率符号随之翻转（全输出空间 +2.74 pp，低秩空间 −1.40 pp），但**两种空间下 PEM 都损害解耦**——证明其收益来自拟合调制而非解耦。模块消融进一步显示：HGF 门控是"可塑性分配"场景的第一支柱（移除后 `corr_abs` +150%、有效秩腰斩），SPHeRe 是"子空间坍缩"场景的第一支柱，WTA 的作用随维度充裕度反转，而 Hebbian 探索在从零训练中是不可或缺的通用模块。**这构成了本文最重要的方法论结论：神经科学启发模块的价值高度依赖场景，不存在普适的"更好组件"。**
 
 ### 7.2 局限
 
-- **单种子**：所有主实验仅 seed=42，精度类结论的置信度受限于 ±3.5 pp 的种子噪声（§6.3）。
+- **种子噪声与统计功效**：早期主实验仅 seed=42，精度类结论曾受限于 ±3.5 pp 的种子噪声（§6.3）；虽已补跑 3–4 个种子并以配对 t 检验重新评估（§4.2、§5.2），但本协议样本量仍不足以分辨 0.8–2.0 pp 量级的精度差，故精度类结论的置信度有限，本文已将核心主张收敛至抗遗忘与几何重构。
 - **基座规模**：仅在 0.5B 模型上验证，尚未在 7B+ 规模上检验机制是否保持。
 - **任务覆盖**：GLUE 五任务的概念漂移流，未覆盖数学推理、指令跟随等生成式任务。
 - **ACC 与遗忘的权衡在低秩时不利**：$r=8$ 上 Aeloru 的 ACC 略低于 LoRA 2.05 pp。
@@ -1562,14 +1563,14 @@ python ex3_coupling.py --steps 250 --tasks sst2,mrpc,qnli,rte,cola --collect-bat
 | 图 3.1 | `hi-dora.html` | Hi-DoRA 双向幅值调制结构 |
 | 图 3.2 | `Hebb_up.png` | 低秩 Hebbian 更新规则 |
 | 图 3.3 | `HGF_map.svg` | HGF 闭式精度传播 |
-| 图 3.4 | `HONGWEN.jpeg` | 红温四阶段认知状态机 |
+| 图 3.4 | `HONGWEN.jpeg` | HongWen 四阶段认知状态机 |
 | 图 3.5 | `DLAM.jpeg` | DLAM 谱滤波睡眠 |
 | 图 3.6 | `PEM.jpeg` | PEM 预测熵最大化神经动态 |
 | 图 3.7 | `Aeloru_D1_LowRank_Modulation.PNG` | 详图 D1：低秩增量构造与双一维调制叠加 |
 | 图 3.8 | `Aeloru_D2_HGF_Gate_HebbianLoop.PNG` | 详图 D2：HGF 门控统计量与 Hebbian 双向闭环 |
 | 图 3.9 | `Aeloru_D7_Constraints_Objective.PNG` | 详图 D7：四项约束、施加时机与训练目标 |
 | 图 3.10 | `Aeloru_D3_PostStep_Update.PNG` | 详图 D3：post_step_update 完整十步时序 |
-| 图 3.11 | `Aeloru_D4_HongWen_StateMachine.PNG` | 详图 D4：红温四阶段认知状态机 |
+| 图 3.11 | `Aeloru_D4_HongWen_StateMachine.PNG` | 详图 D4：HongWen 四阶段认知状态机 |
 | 图 3.12 | `Aeloru_D5_DLAM_Sleep.PNG` | 详图 D5：DLAM 睡眠与跨层异联想绑定 |
 | 图 3.13 | `Aeloru_D6_PEM_Whitening.PNG` | 详图 D6：PEM 神经动态与输入白化三条分支 |
 | 图 4.1 | `figures/fig_ex1_seeds.png` | 概念漂移主结果：4 种子稳健性（ACC / BWT / Forgetting / 耗时） |
@@ -1596,3 +1597,20 @@ python ex3_coupling.py --steps 250 --tasks sst2,mrpc,qnli,rte,cola --collect-bat
 | 图 5.15b | `figures/fig_ex4_1_gamma_dose.png` | PEM 的 γ 剂量—反应（output 模式） |
 | 图 5.16 | `figures/fig_ex4_gamma.png` | γ 剂量扫描的损失峰值诊断与秩扩展 |
 
+## 参考文献
+[1] Morawiecki, P., Krutsylo, A., Wołczyk, M., & Śmieja, M. (2022). Hebbian Continual Representation Learning (Version 1). arXiv. https://doi.org/10.48550/ARXIV.2207.04874
+[2] Mi, F., Lin, T., & Faltings, B. (2021). Representation Memorization for Fast Learning New Knowledge without Forgetting (Version 2). arXiv. https://doi.org/10.48550/ARXIV.2108.12596
+[3] Lagani, G., Falchi, F., Gennaro, C., & Amato, G. (2022). Comparing the performance of Hebbian against backpropagation learning using convolutional neural networks. Neural Computing and Applications, 34(8), 6503–6519. https://doi.org/10.1007/s00521-021-06701-4
+[4] Lagani, G., Falchi, F., Gennaro, C., & Amato, G. (2022). Comparing the performance of Hebbian against backpropagation learning using convolutional neural networks. Neural Computing and Applications, 34(8), 6503–6519. https://doi.org/10.1007/s00521-021-06701-4
+[5] Dexheimer, N., Gaudlitz, S., & Schmidt-Hieber, J. (2025). Spike-timing-dependent Hebbian learning as noisy gradient descent (Version 3). arXiv. https://doi.org/10.48550/ARXIV.2505.10272
+[6] Nimmo, J. J., & Mondragón, E. (2025). Advancing the Biological Plausibility and Efficacy of Hebbian Convolutional Neural Networks. Neural Networks, 190, 107628. https://doi.org/10.1016/j.neunet.2025.107628
+[7] Hua, W., Zhao, K., Leng, L., Cheng, R., Ma, Y., & Guo, Q. (2026). Hebbian Learning with Global Direction (Version 1). arXiv. https://doi.org/10.48550/ARXIV.2601.21367
+[8] Hu, E. J., Shen, Y., Wallis, P., Allen-Zhu, Z., Li, Y., Wang, S., Wang, L., & Chen, W. (2021). LoRA: Low-Rank Adaptation of Large Language Models. arXiv. https://doi.org/10.48550/ARXIV.2106.09685
+[9] Dettmers, T., Pagnoni, A., Holtzman, A., & Zettlemoyer, L. (2023). QLoRA: Efficient Finetuning of Quantized LLMs. arXiv. https://arxiv.org/abs/2305.14314
+[10] Liu, S.-Y., Wang, C.-Y., Yin, H., Molchanov, P., Wang, Y.-C. F., Cheng, K.-T., & Chen, M.-H. (2024). DoRA: Weight-Decomposed Low-Rank Adaptation (Version 1). arXiv. https://doi.org/10.48550/ARXIV.2402.09353
+[11] Yin, Q., Wu, Y., Shen, Z., Li, S., Wang, Z., Li, Y., Leong, C. T., Kang, J., & Gu, J. (2025). Evaluating Parameter Efficient Methods for RLVR. arXiv. https://doi.org/10.48550/ARXIV.2512.23165
+[11] Barra, A., Durante, F., Ladiana, A., & Marra Solazzo, M. (2026). Do Hopfield Networks Dream of Stored Patterns? A Statistical-Mechanical Theory of Dreaming in Multidirectional Associative Memories. arXiv. https://arxiv.org/abs/2605.13721
+[12] Bozkurt, B., Gorguner, E. A., Innocenti, F., & Bogacz, R. (2026). Normative Networks for Source Separation via Local Plasticity and Dendritic Computation. arXiv. https://arxiv.org/abs/2605.19965
+[13] Baskakovs, A., Estebe, S., Enevoldsen, K., Nielbo, K., Mathys, C., & Legrand, N. (2026). Closed-form predictive coding via hierarchical Gaussian filters. arXiv. https://arxiv.org/abs/2605.20293
+[14] Zare, A. G. (2026). Cultivating Machine Intelligence: The OMEGA Shift from Top-Down Optimization to Autopoietic Cognitive Ecologies. arXiv. https://arxiv.org/abs/2605.25062
+[15] Huang, Q., Ko, T., Zhuang, Z., Tang, L., & Zhang, Y. (2025). HiRA: Parameter-Efficient Hadamard High-Rank Adaptation for Large Language Models. In *International Conference on Learning Representations*. https://proceedings.iclr.cc/paper_files/paper/2025/file/48c368f105e8145b945227b73255635a-Paper-Conference.pdf
